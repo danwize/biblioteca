@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/orchestration/" />
+  <Folder Name="/orchestration/apphost/">
+    <Project Path="orchestration/apphost/Biblioteca.AppHost.csproj" />
+  </Folder>
+  <Folder Name="/orchestration/servicedefaults/">
+    <Project Path="orchestration/servicedefaults/Biblioteca.ServiceDefaults.csproj" />
+  </Folder>
+  <Folder Name="/services/" />
+  <Folder Name="/services/api/">
+    <Project Path="services/api/Biblioteca.Api.csproj" />
+  </Folder>
+  <Folder Name="/tests/" />
+  <Folder Name="/tests/api/">
+    <Project Path="tests/api/Biblioteca.Api.Tests.csproj" />
+  </Folder>
+</Solution>

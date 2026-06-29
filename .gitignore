@@ -1,0 +1,11 @@
+bin/
+obj/
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+.env
+.DS_Store
+services/api/data/
+docker/certs/*.pem

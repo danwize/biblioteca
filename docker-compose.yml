@@ -1,0 +1,70 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: biblioteca
+      POSTGRES_USER: biblioteca
+      POSTGRES_PASSWORD: biblioteca
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U biblioteca -d biblioteca"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    environment:
+      ASPNETCORE_URLS: http://+:5000
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Biblioteca: Host=postgres;Port=5432;Database=biblioteca;Username=biblioteca;Password=biblioteca
+      ImageStorage__RootPath: /data/images
+      Cors__AllowedOrigins__0: http://localhost:8081
+      Cors__AllowedOrigins__1: http://localhost:5173
+      Cors__AllowedOrigins__2: https://localhost:8443
+      Cors__AllowedOrigins__3: https://${BIBLIOTECA_HTTPS_HOST:-localhost}:8443
+    ports:
+      - "5000:5000"
+    volumes:
+      - image-data:/data/images
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      VITE_GRAPHQL_URL: /graphql
+    ports:
+      - "8081:80"
+    depends_on:
+      - api
+
+  https-proxy:
+    image: caddy:2.10-alpine
+    profiles: ["https"]
+    environment:
+      BIBLIOTECA_HTTPS_HOST: ${BIBLIOTECA_HTTPS_HOST:-localhost}
+      BIBLIOTECA_TLS_CERT: ${BIBLIOTECA_TLS_CERT:-/certs/biblioteca.pem}
+      BIBLIOTECA_TLS_KEY: ${BIBLIOTECA_TLS_KEY:-/certs/biblioteca-key.pem}
+    ports:
+      - "8443:443"
+    volumes:
+      - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./docker/certs:/certs:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
+      - api
+
+volumes:
+  postgres-data:
+  image-data:
+  caddy-data:
+  caddy-config:
