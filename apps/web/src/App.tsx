@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import { CONFIRM_IMPORT, LIST_COPIES, LOOKUP_BOOK, START_IMPORT } from './graphql/operations'
+import { detectIsbnBarcode } from './lib/barcode'
+import {
+  applyLookupToDraft,
+  applyOcrToDraft,
+  emptyDraft,
+  emptyFieldSources,
+  type Draft,
+  type DraftFieldSources,
+  type LookupBook
+} from './lib/draftAutofill'
 import { graphqlRequest } from './lib/graphql'
 import { normalizeIsbn } from './lib/isbn'
 import { recognizeBookText, type OcrSuggestion } from './lib/ocr'
@@ -16,68 +26,54 @@ type PhysicalCopy = {
   copyNumber: number
 }
 
-type LookupBook = {
-  title: string | null
-  subtitle: string | null
-  authors: string[]
-  isbn13: string | null
-  isbn10: string | null
-  publisher: string | null
-  publishedDate: string | null
-  pageCount: number | null
+type CapturedBookImages = {
+  front_cover: string | null
+  back_cover: string | null
+  spine: string | null
 }
 
-type Draft = {
-  importSessionId: string | null
-  title: string
-  subtitle: string
-  authors: string
-  isbn13: string
-  isbn10: string
-  publisher: string
-  publishedDate: string
-  pageCount: string
-  series: string
-  seriesNumber: string
-  format: string
-  condition: string
-  notes: string
-  ocrText: string
-}
+type ImageKind = keyof CapturedBookImages
+type ToastTone = 'info' | 'success' | 'warning' | 'error'
+type Toast = { id: number; message: string; tone: ToastTone }
+type ImageStatus = 'empty' | 'saved' | 'scanning' | 'barcode' | 'ocr' | 'no_barcode' | 'error'
+type ImageStatuses = Record<ImageKind, ImageStatus>
 
-const emptyDraft: Draft = {
-  importSessionId: null,
-  title: '',
-  subtitle: '',
-  authors: '',
-  isbn13: '',
-  isbn10: '',
-  publisher: '',
-  publishedDate: '',
-  pageCount: '',
-  series: '',
-  seriesNumber: '',
-  format: '',
-  condition: '',
-  notes: '',
-  ocrText: ''
-}
+const emptyImages: CapturedBookImages = { front_cover: null, back_cover: null, spine: null }
+const emptyImageStatuses: ImageStatuses = { front_cover: 'empty', back_cover: 'empty', spine: 'empty' }
 
 function App() {
   const [copies, setCopies] = useState<PhysicalCopy[]>([])
   const [draft, setDraft] = useState<Draft>(emptyDraft)
+  const draftRef = useRef<Draft>(emptyDraft)
+  const [fieldSources, setFieldSources] = useState<DraftFieldSources>(emptyFieldSources)
+  const fieldSourcesRef = useRef<DraftFieldSources>(emptyFieldSources)
   const [isbn, setIsbn] = useState('')
-  const [message, setMessage] = useState('')
+  const [toasts, setToasts] = useState<Toast[]>([])
   const [isBusy, setIsBusy] = useState(false)
-  const [cameraActive, setCameraActive] = useState(false)
-  const [capturedImage, setCapturedImage] = useState<string | null>(null)
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
+  const [capturedImages, setCapturedImages] = useState<CapturedBookImages>(emptyImages)
+  const capturedImagesRef = useRef<CapturedBookImages>(emptyImages)
+  const [imageStatuses, setImageStatuses] = useState<ImageStatuses>(emptyImageStatuses)
+  const [activeImageKind, setActiveImageKind] = useState<ImageKind | null>(null)
+  const [cameraAvailable, setCameraAvailable] = useState(false)
+  const [pickerCameraReady, setPickerCameraReady] = useState(false)
+  const pickerVideoRef = useRef<HTMLVideoElement>(null)
+  const pickerStreamRef = useRef<MediaStream | null>(null)
 
   useEffect(() => {
     void loadCopies()
-    return () => stopCamera()
+    const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false
+    setCameraAvailable(window.isSecureContext && (coarsePointer || Boolean(navigator.mediaDevices?.getUserMedia)))
+    return () => stopPickerCamera()
   }, [])
+
+  useEffect(() => {
+    if (activeImageKind && cameraAvailable) {
+      void startPickerCamera()
+      return () => stopPickerCamera()
+    }
+
+    stopPickerCamera()
+  }, [activeImageKind, cameraAvailable])
 
   async function loadCopies() {
     const data = await graphqlRequest<{ physicalCopies: PhysicalCopy[] }>(LIST_COPIES)
@@ -89,110 +85,146 @@ function App() {
     if (!normalized) return
 
     setIsBusy(true)
-    setMessage('Looking up book metadata...')
+    showToast('Looking up book metadata...')
     try {
+      const currentDraft = draftRef.current
       const sessionData = await graphqlRequest<{ startImportSession: { id: string } }>(START_IMPORT, {
-        input: { scannedIsbn: normalized, detectedTitle: null, detectedAuthors: [], ocrText: draft.ocrText || null }
+        input: { scannedIsbn: normalized, detectedTitle: null, detectedAuthors: [], ocrText: currentDraft.ocrText || null }
       })
       const data = await graphqlRequest<{ lookupBookByIsbn: LookupBook | null }>(LOOKUP_BOOK, { isbn: normalized })
-      const book = data.lookupBookByIsbn
-      setDraft((current) => ({
-        ...current,
-        importSessionId: sessionData.startImportSession.id,
-        title: book?.title ?? current.title,
-        subtitle: book?.subtitle ?? current.subtitle,
-        authors: book?.authors.join(', ') ?? current.authors,
-        isbn13: book?.isbn13 ?? (normalized.length === 13 ? normalized : current.isbn13),
-        isbn10: book?.isbn10 ?? (normalized.length === 10 ? normalized : current.isbn10),
-        publisher: book?.publisher ?? current.publisher,
-        publishedDate: book?.publishedDate ?? current.publishedDate,
-        pageCount: book?.pageCount?.toString() ?? current.pageCount
-      }))
-      setMessage(book ? 'Metadata found. Review and correct before importing.' : 'No metadata found. Fill the form manually.')
+      const next = applyLookupToDraft(
+        draftRef.current,
+        fieldSourcesRef.current,
+        data.lookupBookByIsbn,
+        normalized,
+        sessionData.startImportSession.id
+      )
+      updateDraftState(next.draft)
+      updateFieldSources(next.sources)
+      showToast(data.lookupBookByIsbn ? 'Metadata found from barcode lookup.' : 'No metadata found. Fill the form manually.', data.lookupBookByIsbn ? 'success' : 'warning')
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Lookup failed.')
+      showToast(error instanceof Error ? error.message : 'Lookup failed.', 'error')
     } finally {
       setIsBusy(false)
     }
   }
 
-  async function startCamera() {
-    setMessage('Starting camera...')
+  async function chooseImage(kind: ImageKind, file: File | undefined) {
+    if (!file) return
 
-    if (!window.isSecureContext) {
-      setMessage('Camera access requires HTTPS, or localhost on the same computer. If you opened this from your phone or by LAN IP over http, the browser will block scanning.')
-      return
-    }
+    const dataUrl = await fileToDataUrl(file)
+    setActiveImageKind(null)
+    await processSelectedImage(kind, dataUrl, () => Promise.resolve(file))
+  }
 
+  function handleImageInput(kind: ImageKind, input: HTMLInputElement) {
+    const file = input.files?.[0]
+    input.value = ''
+    void chooseImage(kind, file)
+  }
+
+  function openImagePicker(kind: ImageKind) {
+    setActiveImageKind(kind)
+  }
+
+  function closeImagePicker() {
+    stopPickerCamera()
+    setActiveImageKind(null)
+  }
+
+  async function startPickerCamera() {
     if (!navigator.mediaDevices?.getUserMedia) {
-      setMessage('This browser does not expose camera access to the app. Try Chrome, Edge, or Safari over HTTPS/localhost.')
+      showToast('Camera preview is not available in this browser.', 'warning')
       return
     }
 
     try {
-      stopCamera()
+      stopPickerCamera()
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false })
-      streamRef.current = stream
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        await videoRef.current.play()
+      pickerStreamRef.current = stream
+      if (pickerVideoRef.current) {
+        pickerVideoRef.current.srcObject = stream
+        await pickerVideoRef.current.play()
       }
-      setCameraActive(true)
-      setMessage('Camera started. Capture the cover or back cover when it is in frame.')
+      setPickerCameraReady(true)
     } catch (error) {
-      setCameraActive(false)
-      setMessage(cameraErrorMessage(error))
+      showToast(cameraErrorMessage(error), 'error')
     }
   }
 
-  function stopCamera() {
-    streamRef.current?.getTracks().forEach((track) => track.stop())
-    streamRef.current = null
-    setCameraActive(false)
+  function stopPickerCamera() {
+    pickerStreamRef.current?.getTracks().forEach((track) => track.stop())
+    pickerStreamRef.current = null
+    setPickerCameraReady(false)
   }
 
-  async function captureImage() {
-    const video = videoRef.current
-    if (!video) return
+  async function takePickerPhoto() {
+    if (!activeImageKind || !pickerVideoRef.current) return
 
+    const video = pickerVideoRef.current
     const canvas = document.createElement('canvas')
     canvas.width = video.videoWidth
     canvas.height = video.videoHeight
     canvas.getContext('2d')?.drawImage(video, 0, 0)
     const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
-    setCapturedImage(dataUrl)
-    setMessage('Image captured. Running client-side OCR...')
+    const kind = activeImageKind
+    closeImagePicker()
+    await processSelectedImage(kind, dataUrl, () => canvasToBlob(canvas))
+  }
 
-    canvas.toBlob(async (blob) => {
-      if (!blob) return
-      try {
-        const suggestion = await recognizeBookText(blob)
-        applyOcrSuggestion(suggestion)
-        setMessage('OCR completed. Review the suggested fields.')
-      } catch {
-        setMessage('Image captured. OCR was unavailable, so use barcode lookup or manual entry.')
-      }
-    }, 'image/jpeg', 0.92)
+  async function processSelectedImage(kind: ImageKind, dataUrl: string, getBlob: () => Promise<Blob | null>) {
+    updateCapturedImages({ ...capturedImagesRef.current, [kind]: dataUrl })
+    setImageStatuses((current) => ({ ...current, [kind]: 'scanning' }))
+    showToast(`${imageLabel(kind)} saved. Scanning barcode...`)
+
+    const detectedBarcode = await detectIsbnBarcode(dataUrl)
+    if (detectedBarcode) {
+      setIsbn(detectedBarcode)
+      setImageStatuses((current) => ({ ...current, [kind]: 'barcode' }))
+      showToast(`Barcode found: ${detectedBarcode}. Looking up metadata...`, 'success')
+      await lookupByIsbn(detectedBarcode)
+      return
+    }
+
+    setImageStatuses((current) => ({ ...current, [kind]: 'no_barcode' }))
+    showToast(`No barcode found in ${imageLabel(kind).toLowerCase()}. Trying OCR...`, 'warning')
+
+    const blob = await getBlob()
+    if (!blob) {
+      setImageStatuses((current) => ({ ...current, [kind]: 'saved' }))
+      return
+    }
+
+    try {
+      const suggestion = await recognizeBookText(blob)
+      applyOcrSuggestion(suggestion)
+      const hasSuggestion = Boolean(suggestion.title || suggestion.isbn || suggestion.authors.length)
+      setImageStatuses((current) => ({ ...current, [kind]: hasSuggestion ? 'ocr' : 'saved' }))
+      showToast(hasSuggestion ? 'OCR found possible values.' : 'OCR did not find reliable metadata. Image saved.', hasSuggestion ? 'warning' : 'info')
+    } catch (error) {
+      setImageStatuses((current) => ({ ...current, [kind]: 'error' }))
+      showToast(`Image saved. OCR failed: ${error instanceof Error ? error.message : 'unknown error'}.`, 'error')
+    }
   }
 
   function applyOcrSuggestion(suggestion: OcrSuggestion) {
-    setDraft((current) => ({
-      ...current,
-      title: current.title || suggestion.title || '',
-      authors: current.authors || suggestion.authors.join(', '),
-      isbn13: current.isbn13 || (suggestion.isbn?.length === 13 ? suggestion.isbn : ''),
-      isbn10: current.isbn10 || (suggestion.isbn?.length === 10 ? suggestion.isbn : ''),
-      ocrText: suggestion.rawText
-    }))
+    const next = applyOcrToDraft(draftRef.current, fieldSourcesRef.current, suggestion)
+    updateDraftState(next.draft)
+    updateFieldSources(next.sources)
     if (suggestion.isbn) {
       setIsbn(suggestion.isbn)
     }
   }
 
   async function saveImport() {
+    if (!capturedImages.front_cover || !capturedImages.back_cover) {
+      showToast('Capture at least a front cover and back cover before importing.', 'error')
+      return
+    }
+
     setIsBusy(true)
     try {
-      await graphqlRequest(CONFIRM_IMPORT, {
+      const result = await graphqlRequest<{ confirmBookImport: { id: string } }>(CONFIRM_IMPORT, {
         importSessionId: draft.importSessionId,
         input: {
           title: draft.title,
@@ -213,32 +245,116 @@ function App() {
           ocrText: draft.ocrText || null
         }
       })
-      setMessage('Book imported.')
-      setDraft(emptyDraft)
-      setCapturedImage(null)
+
+      await uploadCapturedImages(result.confirmBookImport.id)
+      showToast('Book imported with front and back images.', 'success')
+      updateDraftState(emptyDraft)
+      updateFieldSources(emptyFieldSources)
+      updateCapturedImages(emptyImages)
+      setImageStatuses(emptyImageStatuses)
+      setIsbn('')
       await loadCopies()
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Import failed.')
+      showToast(error instanceof Error ? error.message : 'Import failed.', 'error')
     } finally {
       setIsBusy(false)
     }
   }
 
   function updateDraft(field: keyof Draft, value: string) {
-    setDraft((current) => ({ ...current, [field]: value }))
+    updateDraftState({ ...draftRef.current, [field]: value })
+    updateFieldSources({ ...fieldSourcesRef.current, [field]: 'manual' })
+  }
+
+  function updateDraftState(next: Draft) {
+    draftRef.current = next
+    setDraft(next)
+  }
+
+  function updateFieldSources(next: DraftFieldSources) {
+    fieldSourcesRef.current = next
+    setFieldSources(next)
+  }
+
+  function updateCapturedImages(next: CapturedBookImages) {
+    capturedImagesRef.current = next
+    setCapturedImages(next)
+  }
+
+  function showToast(message: string, tone: ToastTone = 'info') {
+    const id = Date.now() + Math.random()
+    setToasts((current) => [...current, { id, message, tone }])
+    window.setTimeout(() => {
+      setToasts((current) => current.filter((toast) => toast.id !== id))
+    }, tone === 'error' ? 6500 : 4200)
+  }
+
+  function removeToast(id: number) {
+    setToasts((current) => current.filter((toast) => toast.id !== id))
+  }
+
+  async function uploadCapturedImages(physicalCopyId: string) {
+    for (const [kind, dataUrl] of Object.entries(capturedImagesRef.current) as [ImageKind, string | null][]) {
+      if (!dataUrl) continue
+
+      const formData = new FormData()
+      formData.append('physicalCopyId', physicalCopyId)
+      formData.append('kind', kind)
+      formData.append('file', dataUrlToBlob(dataUrl), `${kind}.jpg`)
+
+      const response = await fetch('/images', { method: 'POST', body: formData })
+      if (!response.ok) {
+        throw new Error(`Book saved, but ${imageLabel(kind).toLowerCase()} upload failed.`)
+      }
+    }
+  }
+
+  function dataUrlToBlob(dataUrl: string): Blob {
+    const [header, base64] = dataUrl.split(',')
+    const mime = header.match(/data:(.*);base64/)?.[1] ?? 'image/jpeg'
+    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0))
+    return new Blob([bytes], { type: mime })
+  }
+
+  function fileToDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = () => reject(new Error('Unable to read selected image.'))
+      reader.readAsDataURL(file)
+    })
+  }
+
+  function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
+    return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92))
+  }
+
+  function imageLabel(kind: ImageKind) {
+    return kind === 'front_cover' ? 'Front cover' : kind === 'back_cover' ? 'Back cover' : 'Spine'
+  }
+
+  function imageStatusLabel(status: ImageStatus) {
+    switch (status) {
+      case 'scanning': return 'Scanning'
+      case 'barcode': return 'Barcode found'
+      case 'ocr': return 'OCR suggested'
+      case 'no_barcode': return 'No barcode'
+      case 'error': return 'Needs review'
+      case 'saved': return 'Saved'
+      default: return 'Empty'
+    }
+  }
+
+  function fieldLabel(label: string, field: keyof Draft) {
+    const source = fieldSources[field]
+    return source === 'empty' ? label : `${label} (${source})`
   }
 
   function cameraErrorMessage(error: unknown) {
     if (error instanceof DOMException) {
-      if (error.name === 'NotAllowedError') {
-        return 'Camera permission was denied. Allow camera access in the browser permissions menu, then try again.'
-      }
-      if (error.name === 'NotFoundError') {
-        return 'No camera was found on this device.'
-      }
-      if (error.name === 'NotReadableError') {
-        return 'The camera is already in use by another app or browser tab.'
-      }
+      if (error.name === 'NotAllowedError') return 'Camera permission was denied.'
+      if (error.name === 'NotFoundError') return 'No camera was found on this device.'
+      if (error.name === 'NotReadableError') return 'The camera is already in use by another app or browser tab.'
       return `Camera failed: ${error.message || error.name}`
     }
 
@@ -251,51 +367,92 @@ function App() {
         <div>
           <p className="eyebrow">Biblioteca v1</p>
           <h1>Scan, correct, and catalog your books.</h1>
-          <p>Barcode lookup comes first. Client-side OCR helps when there is no barcode. Autocrop is tracked for v1.1.</p>
-          <p className="secure-note">Camera scanning works only on HTTPS, or on <code>localhost</code> from the same computer.</p>
+          <p>Barcode lookup comes first. Client-side OCR helps when there is no barcode. Capture front and back images before importing.</p>
+          <p className="secure-note">Camera capture works only on HTTPS, or on <code>localhost</code> from the same computer.</p>
         </div>
-        <button type="button" onClick={cameraActive ? stopCamera : startCamera}>{cameraActive ? 'Stop camera' : 'Start scanner'}</button>
       </header>
 
-      {message && <p className="status" role="status">{message}</p>}
+      <div className="toast-stack" aria-live="polite" aria-atomic="false">
+        {toasts.map((toast) => (
+          <button key={toast.id} type="button" className={`toast toast-${toast.tone}`} onClick={() => removeToast(toast.id)}>
+            {toast.message}
+          </button>
+        ))}
+      </div>
 
-      <section className="scan-grid">
+      <section className="scan-grid" aria-label="Book image capture and import form">
         <div className="camera-card">
-          <video ref={videoRef} aria-label="Book scanner camera preview" playsInline muted />
-          {!cameraActive && <div className="camera-placeholder">Camera preview</div>}
-          <div className="camera-actions">
-            <button type="button" disabled={!cameraActive} onClick={captureImage}>Capture cover/back</button>
+          <div className="image-card-heading">
+            <h2>Book images</h2>
+            <p>Add the back cover for barcode lookup. If no barcode is found, Biblioteca tries OCR.</p>
           </div>
-          {capturedImage && <img className="capture-preview" src={capturedImage} alt="Captured book" />}
+          <div className="compact-image-grid">
+            {(Object.keys(capturedImages) as ImageKind[]).map((kind) => {
+              const dataUrl = capturedImages[kind]
+              const status = imageStatuses[kind]
+              return (
+                <article key={kind} className={`compact-image-tile ${dataUrl ? 'has-image' : ''}`}>
+                  <button type="button" className="thumbnail-button" onClick={() => openImagePicker(kind)} aria-label={`${dataUrl ? 'Edit' : 'Add'} ${imageLabel(kind)}`}>
+                    {dataUrl ? <img src={dataUrl} alt={imageLabel(kind)} /> : <span className="plus-mark" aria-hidden="true">+</span>}
+                    <span className={`image-status status-${status}`}>{imageStatusLabel(status)}</span>
+                    {dataUrl && <span className="edit-badge">Edit</span>}
+                  </button>
+                  <h3>{imageLabel(kind)}</h3>
+                  <p>{kind === 'spine' ? 'Optional' : 'Required'}</p>
+                </article>
+              )
+            })}
+          </div>
         </div>
+
+        {activeImageKind && (
+          <div className="picker-backdrop" role="presentation" onClick={closeImagePicker}>
+            <section className="image-picker-sheet" role="dialog" aria-modal="true" aria-labelledby="image-picker-title" onClick={(event) => event.stopPropagation()}>
+              <h2 id="image-picker-title">{imageLabel(activeImageKind)}</h2>
+              <p>Use a clear, well-lit image. Barcodes are scanned before OCR.</p>
+              {cameraAvailable && (
+                <div className="picker-camera-panel">
+                  <video ref={pickerVideoRef} aria-label="Camera preview" playsInline muted />
+                  {!pickerCameraReady && <div className="picker-camera-placeholder">Starting camera...</div>}
+                  <button type="button" className="picker-primary-button" disabled={!pickerCameraReady} onClick={() => void takePickerPhoto()}>Take photo</button>
+                </div>
+              )}
+              <label className="picker-primary-action file-action">
+                Choose file
+                <input type="file" accept="image/*" onChange={(event) => handleImageInput(activeImageKind, event.currentTarget)} aria-label={`Choose ${imageLabel(activeImageKind)} image`} />
+              </label>
+              <button type="button" className="picker-cancel" onClick={closeImagePicker}>Cancel</button>
+            </section>
+          </div>
+        )}
 
         <form className="import-form" onSubmit={(event) => { event.preventDefault(); void saveImport() }}>
           <label>
             ISBN lookup
             <span className="inline-field">
-              <input value={isbn} onChange={(event) => setIsbn(event.target.value)} placeholder="9780486214375" />
+              <input value={isbn} onChange={(event) => setIsbn(event.target.value)} placeholder="9780486214375" inputMode="numeric" />
               <button type="button" disabled={isBusy} onClick={() => void lookupByIsbn()}>Lookup</button>
             </span>
           </label>
 
-          <label>Title<input required value={draft.title} onChange={(event) => updateDraft('title', event.target.value)} /></label>
-          <label>Authors<input value={draft.authors} onChange={(event) => updateDraft('authors', event.target.value)} placeholder="Comma-separated" /></label>
-          <label>Series<input value={draft.series} onChange={(event) => updateDraft('series', event.target.value)} /></label>
-          <label>Series number<input value={draft.seriesNumber} onChange={(event) => updateDraft('seriesNumber', event.target.value)} /></label>
+          <label>{fieldLabel('Title', 'title')}<input required value={draft.title} onChange={(event) => updateDraft('title', event.target.value)} /></label>
+          <label>{fieldLabel('Authors', 'authors')}<input value={draft.authors} onChange={(event) => updateDraft('authors', event.target.value)} placeholder="Comma-separated" /></label>
+          <label>{fieldLabel('Series', 'series')}<input value={draft.series} onChange={(event) => updateDraft('series', event.target.value)} /></label>
+          <label>{fieldLabel('Series number', 'seriesNumber')}<input value={draft.seriesNumber} onChange={(event) => updateDraft('seriesNumber', event.target.value)} /></label>
           <div className="two-columns">
-            <label>ISBN-13<input value={draft.isbn13} onChange={(event) => updateDraft('isbn13', event.target.value)} /></label>
-            <label>ISBN-10<input value={draft.isbn10} onChange={(event) => updateDraft('isbn10', event.target.value)} /></label>
+            <label>{fieldLabel('ISBN-13', 'isbn13')}<input value={draft.isbn13} onChange={(event) => updateDraft('isbn13', event.target.value)} /></label>
+            <label>{fieldLabel('ISBN-10', 'isbn10')}<input value={draft.isbn10} onChange={(event) => updateDraft('isbn10', event.target.value)} /></label>
           </div>
           <div className="two-columns">
-            <label>Publisher<input value={draft.publisher} onChange={(event) => updateDraft('publisher', event.target.value)} /></label>
-            <label>Published<input value={draft.publishedDate} onChange={(event) => updateDraft('publishedDate', event.target.value)} /></label>
+            <label>{fieldLabel('Publisher', 'publisher')}<input value={draft.publisher} onChange={(event) => updateDraft('publisher', event.target.value)} /></label>
+            <label>{fieldLabel('Published', 'publishedDate')}<input value={draft.publishedDate} onChange={(event) => updateDraft('publishedDate', event.target.value)} /></label>
           </div>
           <div className="two-columns">
-            <label>Pages<input value={draft.pageCount} onChange={(event) => updateDraft('pageCount', event.target.value)} inputMode="numeric" /></label>
-            <label>Format<input value={draft.format} onChange={(event) => updateDraft('format', event.target.value)} placeholder="paperback, hardback" /></label>
+            <label>{fieldLabel('Pages', 'pageCount')}<input value={draft.pageCount} onChange={(event) => updateDraft('pageCount', event.target.value)} inputMode="numeric" /></label>
+            <label>{fieldLabel('Format', 'format')}<input value={draft.format} onChange={(event) => updateDraft('format', event.target.value)} placeholder="paperback, hardback" /></label>
           </div>
-          <label>Notes<textarea value={draft.notes} onChange={(event) => updateDraft('notes', event.target.value)} /></label>
-          <button type="submit" disabled={isBusy || !draft.title}>Import book</button>
+          <label>{fieldLabel('Notes', 'notes')}<textarea value={draft.notes} onChange={(event) => updateDraft('notes', event.target.value)} /></label>
+          <button type="submit" disabled={isBusy || !draft.title || !capturedImages.front_cover || !capturedImages.back_cover}>Import book</button>
         </form>
       </section>
 
