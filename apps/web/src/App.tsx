@@ -124,6 +124,7 @@ function App() {
   }
 
   function openImagePicker(kind: ImageKind) {
+    if (isBusy) return
     setActiveImageKind(kind)
   }
 
@@ -173,37 +174,43 @@ function App() {
   }
 
   async function processSelectedImage(kind: ImageKind, dataUrl: string, getBlob: () => Promise<Blob | null>) {
-    updateCapturedImages({ ...capturedImagesRef.current, [kind]: dataUrl })
-    setImageStatuses((current) => ({ ...current, [kind]: 'scanning' }))
-    showToast(`${imageLabel(kind)} saved. Scanning barcode...`)
-
-    const detectedBarcode = await detectIsbnBarcode(dataUrl)
-    if (detectedBarcode) {
-      setIsbn(detectedBarcode)
-      setImageStatuses((current) => ({ ...current, [kind]: 'barcode' }))
-      showToast(`Barcode found: ${detectedBarcode}. Looking up metadata...`, 'success')
-      await lookupByIsbn(detectedBarcode)
-      return
-    }
-
-    setImageStatuses((current) => ({ ...current, [kind]: 'no_barcode' }))
-    showToast(`No barcode found in ${imageLabel(kind).toLowerCase()}. Trying OCR...`, 'warning')
-
-    const blob = await getBlob()
-    if (!blob) {
-      setImageStatuses((current) => ({ ...current, [kind]: 'saved' }))
-      return
-    }
-
+    setIsBusy(true)
     try {
-      const suggestion = await recognizeBookText(blob)
-      applyOcrSuggestion(suggestion)
-      const hasSuggestion = Boolean(suggestion.title || suggestion.isbn || suggestion.authors.length)
-      setImageStatuses((current) => ({ ...current, [kind]: hasSuggestion ? 'ocr' : 'saved' }))
-      showToast(hasSuggestion ? 'OCR found possible values.' : 'OCR did not find reliable metadata. Image saved.', hasSuggestion ? 'warning' : 'info')
-    } catch (error) {
-      setImageStatuses((current) => ({ ...current, [kind]: 'error' }))
-      showToast(`Image saved. OCR failed: ${error instanceof Error ? error.message : 'unknown error'}.`, 'error')
+      updateCapturedImages({ ...capturedImagesRef.current, [kind]: dataUrl })
+      setImageStatuses((current) => ({ ...current, [kind]: 'scanning' }))
+      showToast(`${imageLabel(kind)} saved. Scanning barcode...`)
+
+      const detectedBarcode = await detectIsbnBarcode(dataUrl)
+      if (detectedBarcode) {
+        setIsbn(detectedBarcode)
+        setImageStatuses((current) => ({ ...current, [kind]: 'barcode' }))
+        showToast(`Barcode found: ${detectedBarcode}. Looking up metadata...`, 'success')
+        await lookupByIsbn(detectedBarcode)
+        return
+      }
+
+      setImageStatuses((current) => ({ ...current, [kind]: 'no_barcode' }))
+      showToast(`No barcode found in ${imageLabel(kind).toLowerCase()}. Trying OCR...`, 'warning')
+
+      const blob = await getBlob()
+      if (!blob) {
+        setImageStatuses((current) => ({ ...current, [kind]: 'saved' }))
+        return
+      }
+
+      try {
+        const ocrFn = (window as { __recognizeBookText?: typeof recognizeBookText }).__recognizeBookText ?? recognizeBookText
+        const suggestion = await ocrFn(blob)
+        applyOcrSuggestion(suggestion)
+        const hasSuggestion = Boolean(suggestion.title || suggestion.isbn || suggestion.authors.length)
+        setImageStatuses((current) => ({ ...current, [kind]: hasSuggestion ? 'ocr' : 'saved' }))
+        showToast(hasSuggestion ? 'OCR found possible values.' : 'OCR did not find reliable metadata. Image saved.', hasSuggestion ? 'warning' : 'info')
+      } catch (error) {
+        setImageStatuses((current) => ({ ...current, [kind]: 'error' }))
+        showToast(`Image saved. OCR failed: ${error instanceof Error ? error.message : 'unknown error'}.`, 'error')
+      }
+    } finally {
+      setIsBusy(false)
     }
   }
 
@@ -246,13 +253,20 @@ function App() {
         }
       })
 
-      await uploadCapturedImages(result.confirmBookImport.id)
-      showToast('Book imported with front and back images.', 'success')
+      const physicalCopyId = result.confirmBookImport.id
       updateDraftState(emptyDraft)
       updateFieldSources(emptyFieldSources)
+      setIsbn('')
+
+      try {
+        await uploadCapturedImages(physicalCopyId)
+        showToast('Book imported with front and back images.', 'success')
+      } catch (uploadError) {
+        showToast(uploadError instanceof Error ? uploadError.message : 'Book saved, but image upload failed.', 'warning')
+      }
+
       updateCapturedImages(emptyImages)
       setImageStatuses(emptyImageStatuses)
-      setIsbn('')
       await loadCopies()
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Import failed.', 'error')

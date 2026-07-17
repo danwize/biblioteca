@@ -1,5 +1,11 @@
 import { expect, test } from '@playwright/test'
 
+declare global {
+  interface Window {
+    __recognizeBookText?: (blob: Blob) => Promise<{ rawText: string; isbn: string | null; title: string | null; authors: string[] }>
+  }
+}
+
 test('loads scanner shell', async ({ page }) => {
   await mockGraphql(page)
   await page.goto('/')
@@ -34,6 +40,60 @@ test('captures back cover barcode and fills lookup metadata', async ({ page }) =
   await expect(page.getByLabel(/authors/i)).toHaveValue('Barcode Author')
   await expect(page.getByLabel(/isbn lookup/i)).toHaveValue('9780486214375')
   await expect(page.locator('.status-barcode', { hasText: 'Barcode found' })).toBeVisible()
+})
+
+test('falls back to OCR when no barcode found and fills metadata', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__recognizeBookText = async () => ({
+      rawText: 'The OCR Novel\nBy OCR Author\n',
+      title: 'The OCR Novel',
+      authors: ['OCR Author'],
+      isbn: null
+    })
+  })
+  await mockGraphql(page)
+
+  await page.goto('/')
+  await page.getByRole('button', { name: /add front cover/i }).click()
+  await page.getByLabel(/choose front cover image/i).setInputFiles({
+    name: 'front-cover.png',
+    mimeType: 'image/png',
+    buffer: onePixelPng()
+  })
+
+  await expect(page.getByLabel(/title/i)).toHaveValue('The OCR Novel')
+  await expect(page.getByLabel(/authors/i)).toHaveValue('OCR Author')
+  await expect(page.locator('.status-ocr', { hasText: 'OCR suggested' })).toBeVisible()
+})
+
+test('manual field edit survives subsequent lookup', async ({ page }) => {
+  await page.addInitScript(() => {
+    class MockBarcodeDetector {
+      async detect() {
+        return [{ rawValue: '9780486214375' }]
+      }
+    }
+
+    Object.defineProperty(window, 'BarcodeDetector', { value: MockBarcodeDetector })
+  })
+  await mockGraphql(page)
+
+  await page.goto('/')
+  await page.getByRole('button', { name: /add back cover/i }).click()
+  await page.getByLabel(/choose back cover image/i).setInputFiles({
+    name: 'back-cover.png',
+    mimeType: 'image/png',
+    buffer: onePixelPng()
+  })
+
+  await expect(page.getByLabel(/title/i)).toHaveValue('Barcode Lookup Title')
+
+  await page.getByLabel(/title/i).fill('My Custom Title')
+
+  await page.getByLabel(/isbn lookup/i).fill('9780486214375')
+  await page.getByRole('button', { name: /^lookup$/i }).click()
+
+  await expect(page.getByLabel(/title/i)).toHaveValue('My Custom Title')
 })
 
 async function mockGraphql(page: import('@playwright/test').Page) {
