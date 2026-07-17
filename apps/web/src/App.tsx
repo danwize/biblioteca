@@ -62,6 +62,7 @@ function App() {
   const pickerVideoRef = useRef<HTMLVideoElement>(null)
   const pickerStreamRef = useRef<MediaStream | null>(null)
   const lookupSequenceRef = useRef(0)
+  const pendingLookupCountRef = useRef(0)
 
   useEffect(() => {
     void loadCopies()
@@ -92,6 +93,7 @@ function App() {
     setIsBusy(true)
     const lookupSequence = lookupSequenceRef.current + 1
     lookupSequenceRef.current = lookupSequence
+    pendingLookupCountRef.current += 1
     showToast('Looking up book metadata...')
     try {
       const currentDraft = draftRef.current
@@ -113,7 +115,7 @@ function App() {
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Lookup failed.', 'error')
     } finally {
-      setIsBusy(false)
+      if (--pendingLookupCountRef.current === 0) setIsBusy(false)
     }
   }
 
