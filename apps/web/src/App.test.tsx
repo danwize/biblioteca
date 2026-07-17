@@ -96,7 +96,27 @@ describe('App', () => {
     expect(mocks.recognizeBookText).toHaveBeenCalledTimes(1)
   })
 
-  it('shows take-photo capture input as primary on coarse-pointer device', async () => {
+  it('keeps other image tiles usable while front cover OCR is still running', async () => {
+    let resolveOcr: (value: { rawText: string; isbn: string | null; title: string | null; authors: string[] }) => void = () => {}
+    mocks.recognizeBookText.mockReturnValue(new Promise((resolve) => { resolveOcr = resolve }))
+    mocks.detectIsbnBarcode.mockResolvedValue('9780486214375')
+    render(<App />)
+
+    await userEvent.click(screen.getByRole('button', { name: /add front cover/i }))
+    await userEvent.upload(screen.getByLabelText(/choose front cover image/i), blankJpeg)
+    await waitFor(() => expect(mocks.recognizeBookText).toHaveBeenCalledTimes(1))
+
+    await userEvent.click(screen.getByRole('button', { name: /add back cover/i }))
+    await userEvent.upload(screen.getByLabelText(/choose back cover image/i), blankJpeg)
+
+    await waitFor(() => expect(screen.getByDisplayValue('Lookup Title')).toBeInTheDocument())
+    expect(mocks.detectIsbnBarcode).toHaveBeenCalledTimes(1)
+
+    resolveOcr({ rawText: 'Late OCR Title', isbn: null, title: 'Late OCR Title', authors: [] })
+    await waitFor(() => expect(screen.getByDisplayValue('Lookup Title')).toBeInTheDocument())
+  })
+
+  it('opens native capture directly and exposes file fallback on coarse-pointer device', async () => {
     vi.stubGlobal('matchMedia', (query: string) => ({
       matches: query === '(pointer: coarse)',
       media: query,
@@ -107,12 +127,16 @@ describe('App', () => {
       dispatchEvent: () => false
     }))
     vi.stubGlobal('isSecureContext', true)
+    const clickSpy = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {})
     render(<App />)
 
     await userEvent.click(screen.getByRole('button', { name: /add back cover/i }))
 
-    expect(screen.getByLabelText(/take back cover photo/i)).toBeInTheDocument()
-    expect(screen.getByLabelText(/choose back cover image/i)).toBeInTheDocument()
+    const nativeInput = screen.getByLabelText(/take back cover photo/i)
+    expect(nativeInput).toHaveAttribute('capture', 'environment')
+    expect(clickSpy).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /choose file instead/i })).toBeInTheDocument()
   })
 
   it('falls back to OCR when barcode lookup misses', async () => {

@@ -54,11 +54,14 @@ function App() {
   const capturedImagesRef = useRef<CapturedBookImages>(emptyImages)
   const [imageStatuses, setImageStatuses] = useState<ImageStatuses>(emptyImageStatuses)
   const [activeImageKind, setActiveImageKind] = useState<ImageKind | null>(null)
+  const [mobileFallbackKind, setMobileFallbackKind] = useState<ImageKind | null>(null)
   const [coarsePointer, setCoarsePointer] = useState(false)
   const [cameraAvailable, setCameraAvailable] = useState(false)
   const [pickerCameraReady, setPickerCameraReady] = useState(false)
+  const nativeCaptureInputsRef = useRef<Partial<Record<ImageKind, HTMLInputElement | null>>>({})
   const pickerVideoRef = useRef<HTMLVideoElement>(null)
   const pickerStreamRef = useRef<MediaStream | null>(null)
+  const lookupSequenceRef = useRef(0)
 
   useEffect(() => {
     void loadCopies()
@@ -87,6 +90,8 @@ function App() {
     if (!normalized) return
 
     setIsBusy(true)
+    const lookupSequence = lookupSequenceRef.current + 1
+    lookupSequenceRef.current = lookupSequence
     showToast('Looking up book metadata...')
     try {
       const currentDraft = draftRef.current
@@ -94,6 +99,7 @@ function App() {
         input: { scannedIsbn: normalized, detectedTitle: null, detectedAuthors: [], ocrText: currentDraft.ocrText || null }
       })
       const data = await graphqlRequest<{ lookupBookByIsbn: LookupBook | null }>(LOOKUP_BOOK, { isbn: normalized })
+      if (lookupSequence !== lookupSequenceRef.current) return
       const next = applyLookupToDraft(
         draftRef.current,
         fieldSourcesRef.current,
@@ -116,6 +122,7 @@ function App() {
 
     const dataUrl = await fileToDataUrl(file)
     setActiveImageKind(null)
+    setMobileFallbackKind(null)
     await processSelectedImage(kind, dataUrl, () => Promise.resolve(file))
   }
 
@@ -126,7 +133,17 @@ function App() {
   }
 
   function openImagePicker(kind: ImageKind) {
-    if (isBusy) return
+    if (coarsePointer) {
+      setMobileFallbackKind(kind)
+      nativeCaptureInputsRef.current[kind]?.click()
+      return
+    }
+
+    setActiveImageKind(kind)
+  }
+
+  function openFallbackImagePicker(kind: ImageKind) {
+    setMobileFallbackKind(null)
     setActiveImageKind(kind)
   }
 
@@ -176,48 +193,43 @@ function App() {
   }
 
   async function processSelectedImage(kind: ImageKind, dataUrl: string, getBlob: () => Promise<Blob | null>) {
-    setIsBusy(true)
-    try {
-      updateCapturedImages({ ...capturedImagesRef.current, [kind]: dataUrl })
-      setImageStatuses((current) => ({ ...current, [kind]: 'scanning' }))
+    updateCapturedImages({ ...capturedImagesRef.current, [kind]: dataUrl })
+    setImageStatuses((current) => ({ ...current, [kind]: 'scanning' }))
 
-      if (kind !== 'front_cover') {
-        showToast(`${imageLabel(kind)} saved. Scanning barcode...`)
-        const detectedBarcode = await detectIsbnBarcode(dataUrl)
-        if (detectedBarcode) {
-          setIsbn(detectedBarcode)
-          setImageStatuses((current) => ({ ...current, [kind]: 'barcode' }))
-          showToast(`Barcode found: ${detectedBarcode}. Looking up metadata...`, 'success')
-          await lookupByIsbn(detectedBarcode)
-          return
-        }
-        setImageStatuses((current) => ({ ...current, [kind]: 'no_barcode' }))
-        showToast(`No barcode found in ${imageLabel(kind).toLowerCase()}. Trying OCR...`, 'warning')
-      } else {
-        showToast(`${imageLabel(kind)} saved. Running OCR...`)
-      }
-
-      const blob = await getBlob()
-      if (!blob) {
-        setImageStatuses((current) => ({ ...current, [kind]: 'saved' }))
+    if (kind !== 'front_cover') {
+      showToast(`${imageLabel(kind)} saved. Scanning barcode...`)
+      const detectedBarcode = await detectIsbnBarcode(dataUrl)
+      if (detectedBarcode) {
+        setIsbn(detectedBarcode)
+        setImageStatuses((current) => ({ ...current, [kind]: 'barcode' }))
+        showToast(`Barcode found: ${detectedBarcode}. Looking up metadata...`, 'success')
+        await lookupByIsbn(detectedBarcode)
         return
       }
+      setImageStatuses((current) => ({ ...current, [kind]: 'no_barcode' }))
+      showToast(`No barcode found in ${imageLabel(kind).toLowerCase()}. Trying OCR...`, 'warning')
+    } else {
+      showToast(`${imageLabel(kind)} saved. Running OCR...`)
+    }
 
-      try {
-        const ocrFn = import.meta.env.MODE !== 'production'
-          ? ((window as { __recognizeBookText?: typeof recognizeBookText }).__recognizeBookText ?? recognizeBookText)
-          : recognizeBookText
-        const suggestion = await ocrFn(blob)
-        applyOcrSuggestion(suggestion)
-        const hasSuggestion = Boolean(suggestion.title || suggestion.isbn || suggestion.authors.length)
-        setImageStatuses((current) => ({ ...current, [kind]: hasSuggestion ? 'ocr' : 'saved' }))
-        showToast(hasSuggestion ? 'OCR found possible values.' : 'OCR did not find reliable metadata. Image saved.', hasSuggestion ? 'warning' : 'info')
-      } catch (error) {
-        setImageStatuses((current) => ({ ...current, [kind]: 'error' }))
-        showToast(`Image saved. OCR failed: ${error instanceof Error ? error.message : 'unknown error'}.`, 'error')
-      }
-    } finally {
-      setIsBusy(false)
+    const blob = await getBlob()
+    if (!blob) {
+      setImageStatuses((current) => ({ ...current, [kind]: 'saved' }))
+      return
+    }
+
+    try {
+      const ocrFn = import.meta.env.MODE !== 'production'
+        ? ((window as { __recognizeBookText?: typeof recognizeBookText }).__recognizeBookText ?? recognizeBookText)
+        : recognizeBookText
+      const suggestion = await ocrFn(blob)
+      applyOcrSuggestion(suggestion)
+      const hasSuggestion = Boolean(suggestion.title || suggestion.isbn || suggestion.authors.length)
+      setImageStatuses((current) => ({ ...current, [kind]: hasSuggestion ? 'ocr' : 'saved' }))
+      showToast(hasSuggestion ? 'OCR found possible values.' : 'OCR did not find reliable metadata. Image saved.', hasSuggestion ? 'warning' : 'info')
+    } catch (error) {
+      setImageStatuses((current) => ({ ...current, [kind]: 'error' }))
+      showToast(`Image saved. OCR failed: ${error instanceof Error ? error.message : 'unknown error'}.`, 'error')
     }
   }
 
@@ -418,8 +430,22 @@ function App() {
                     <span className={`image-status status-${status}`}>{imageStatusLabel(status)}</span>
                     {dataUrl && <span className="edit-badge">Edit</span>}
                   </button>
+                  <input
+                    ref={(input) => { nativeCaptureInputsRef.current[kind] = input }}
+                    className="native-capture-input"
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={(event) => handleImageInput(kind, event.currentTarget)}
+                    aria-label={`Take ${imageLabel(kind)} photo`}
+                  />
                   <h3>{imageLabel(kind)}</h3>
                   <p>{kind === 'spine' ? 'Optional' : 'Required'}</p>
+                  {mobileFallbackKind === kind && (
+                    <button type="button" className="tile-fallback-button" onClick={() => openFallbackImagePicker(kind)}>
+                      Choose file instead
+                    </button>
+                  )}
                 </article>
               )
             })}
