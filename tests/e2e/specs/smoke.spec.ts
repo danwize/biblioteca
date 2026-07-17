@@ -96,6 +96,61 @@ test('manual field edit survives subsequent lookup', async ({ page }) => {
   await expect(page.getByLabel(/title/i)).toHaveValue('My Custom Title')
 })
 
+test('mobile coarse-pointer picker shows take-photo as primary and choose-file as fallback', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: (query: string) => ({
+        matches: query === '(pointer: coarse)',
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {}
+      })
+    })
+    Object.defineProperty(window, 'isSecureContext', { value: true, configurable: true })
+  })
+  await mockGraphql(page)
+
+  await page.goto('/')
+  await page.getByRole('button', { name: /add back cover/i }).click()
+
+  await expect(page.getByLabel(/take back cover photo/i)).toBeVisible()
+  await expect(page.getByLabel(/choose back cover image/i)).toBeVisible()
+})
+
+test('mobile file fallback processes image with OCR when no barcode found', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: (query: string) => ({
+        matches: query === '(pointer: coarse)',
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {}
+      })
+    })
+    Object.defineProperty(window, 'isSecureContext', { value: true, configurable: true })
+    window.__recognizeBookText = async () => ({
+      rawText: 'Mobile Book Title\nBy Mobile Author\n',
+      title: 'Mobile Book Title',
+      authors: ['Mobile Author'],
+      isbn: null
+    })
+  })
+  await mockGraphql(page)
+
+  await page.goto('/')
+  await page.getByRole('button', { name: /add back cover/i }).click()
+  await page.getByLabel(/choose back cover image/i).setInputFiles({
+    name: 'back-cover.png',
+    mimeType: 'image/png',
+    buffer: onePixelPng()
+  })
+
+  await expect(page.getByLabel(/title/i)).toHaveValue('Mobile Book Title')
+  await expect(page.locator('.status-ocr', { hasText: 'OCR suggested' })).toBeVisible()
+})
+
 async function mockGraphql(page: import('@playwright/test').Page) {
   await page.route('**/graphql', async (route) => {
     const request = route.request()

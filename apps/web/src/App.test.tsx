@@ -78,6 +78,43 @@ describe('App', () => {
     expect(screen.getAllByDisplayValue('9780486214375')).toHaveLength(2)
   })
 
+  it('front cover skips barcode detection and runs OCR directly', async () => {
+    mocks.detectIsbnBarcode.mockResolvedValue('9780486214375')
+    mocks.recognizeBookText.mockResolvedValue({
+      rawText: 'Front Cover Title\nby F. Author',
+      isbn: null,
+      title: 'Front Cover Title',
+      authors: ['F. Author']
+    })
+    render(<App />)
+
+    await userEvent.click(screen.getByRole('button', { name: /add front cover/i }))
+    await userEvent.upload(screen.getByLabelText(/choose front cover image/i), blankJpeg)
+
+    await waitFor(() => expect(screen.getByDisplayValue('Front Cover Title')).toBeInTheDocument())
+    expect(mocks.detectIsbnBarcode).not.toHaveBeenCalled()
+    expect(mocks.recognizeBookText).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows take-photo capture input as primary on coarse-pointer device', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(pointer: coarse)',
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false
+    }))
+    vi.stubGlobal('isSecureContext', true)
+    render(<App />)
+
+    await userEvent.click(screen.getByRole('button', { name: /add back cover/i }))
+
+    expect(screen.getByLabelText(/take back cover photo/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/choose back cover image/i)).toBeInTheDocument()
+  })
+
   it('falls back to OCR when barcode lookup misses', async () => {
     mocks.detectIsbnBarcode.mockResolvedValue(null)
     mocks.recognizeBookText.mockResolvedValue({

@@ -54,6 +54,7 @@ function App() {
   const capturedImagesRef = useRef<CapturedBookImages>(emptyImages)
   const [imageStatuses, setImageStatuses] = useState<ImageStatuses>(emptyImageStatuses)
   const [activeImageKind, setActiveImageKind] = useState<ImageKind | null>(null)
+  const [coarsePointer, setCoarsePointer] = useState(false)
   const [cameraAvailable, setCameraAvailable] = useState(false)
   const [pickerCameraReady, setPickerCameraReady] = useState(false)
   const pickerVideoRef = useRef<HTMLVideoElement>(null)
@@ -61,19 +62,20 @@ function App() {
 
   useEffect(() => {
     void loadCopies()
-    const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false
-    setCameraAvailable(window.isSecureContext && (coarsePointer || Boolean(navigator.mediaDevices?.getUserMedia)))
+    const coarse = window.matchMedia?.('(pointer: coarse)').matches ?? false
+    setCoarsePointer(coarse)
+    setCameraAvailable(window.isSecureContext && (coarse || Boolean(navigator.mediaDevices?.getUserMedia)))
     return () => stopPickerCamera()
   }, [])
 
   useEffect(() => {
-    if (activeImageKind && cameraAvailable) {
+    if (activeImageKind && cameraAvailable && !coarsePointer) {
       void startPickerCamera()
       return () => stopPickerCamera()
     }
 
     stopPickerCamera()
-  }, [activeImageKind, cameraAvailable])
+  }, [activeImageKind, cameraAvailable, coarsePointer])
 
   async function loadCopies() {
     const data = await graphqlRequest<{ physicalCopies: PhysicalCopy[] }>(LIST_COPIES)
@@ -178,19 +180,22 @@ function App() {
     try {
       updateCapturedImages({ ...capturedImagesRef.current, [kind]: dataUrl })
       setImageStatuses((current) => ({ ...current, [kind]: 'scanning' }))
-      showToast(`${imageLabel(kind)} saved. Scanning barcode...`)
 
-      const detectedBarcode = await detectIsbnBarcode(dataUrl)
-      if (detectedBarcode) {
-        setIsbn(detectedBarcode)
-        setImageStatuses((current) => ({ ...current, [kind]: 'barcode' }))
-        showToast(`Barcode found: ${detectedBarcode}. Looking up metadata...`, 'success')
-        await lookupByIsbn(detectedBarcode)
-        return
+      if (kind !== 'front_cover') {
+        showToast(`${imageLabel(kind)} saved. Scanning barcode...`)
+        const detectedBarcode = await detectIsbnBarcode(dataUrl)
+        if (detectedBarcode) {
+          setIsbn(detectedBarcode)
+          setImageStatuses((current) => ({ ...current, [kind]: 'barcode' }))
+          showToast(`Barcode found: ${detectedBarcode}. Looking up metadata...`, 'success')
+          await lookupByIsbn(detectedBarcode)
+          return
+        }
+        setImageStatuses((current) => ({ ...current, [kind]: 'no_barcode' }))
+        showToast(`No barcode found in ${imageLabel(kind).toLowerCase()}. Trying OCR...`, 'warning')
+      } else {
+        showToast(`${imageLabel(kind)} saved. Running OCR...`)
       }
-
-      setImageStatuses((current) => ({ ...current, [kind]: 'no_barcode' }))
-      showToast(`No barcode found in ${imageLabel(kind).toLowerCase()}. Trying OCR...`, 'warning')
 
       const blob = await getBlob()
       if (!blob) {
@@ -199,7 +204,9 @@ function App() {
       }
 
       try {
-        const ocrFn = (window as { __recognizeBookText?: typeof recognizeBookText }).__recognizeBookText ?? recognizeBookText
+        const ocrFn = import.meta.env.MODE !== 'production'
+          ? ((window as { __recognizeBookText?: typeof recognizeBookText }).__recognizeBookText ?? recognizeBookText)
+          : recognizeBookText
         const suggestion = await ocrFn(blob)
         applyOcrSuggestion(suggestion)
         const hasSuggestion = Boolean(suggestion.title || suggestion.isbn || suggestion.authors.length)
@@ -425,11 +432,18 @@ function App() {
               <h2 id="image-picker-title">{imageLabel(activeImageKind)}</h2>
               <p>Use a clear, well-lit image. Barcodes are scanned before OCR.</p>
               {cameraAvailable && (
-                <div className="picker-camera-panel">
-                  <video ref={pickerVideoRef} aria-label="Camera preview" playsInline muted />
-                  {!pickerCameraReady && <div className="picker-camera-placeholder">Starting camera...</div>}
-                  <button type="button" className="picker-primary-button" disabled={!pickerCameraReady} onClick={() => void takePickerPhoto()}>Take photo</button>
-                </div>
+                coarsePointer ? (
+                  <label className="picker-primary-action capture-action">
+                    Take photo
+                    <input type="file" accept="image/*" capture="environment" onChange={(event) => handleImageInput(activeImageKind, event.currentTarget)} aria-label={`Take ${imageLabel(activeImageKind)} photo`} />
+                  </label>
+                ) : (
+                  <div className="picker-camera-panel">
+                    <video ref={pickerVideoRef} aria-label="Camera preview" playsInline muted />
+                    {!pickerCameraReady && <div className="picker-camera-placeholder">Starting camera...</div>}
+                    <button type="button" className="picker-primary-button" disabled={!pickerCameraReady} onClick={() => void takePickerPhoto()}>Take photo</button>
+                  </div>
+                )
               )}
               <label className="picker-primary-action file-action">
                 Choose file
