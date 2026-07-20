@@ -96,7 +96,7 @@ test('manual field edit survives subsequent lookup', async ({ page }) => {
   await expect(page.getByLabel(/title/i)).toHaveValue('My Custom Title')
 })
 
-test('mobile coarse-pointer plus opens native capture directly with file fallback', async ({ page }) => {
+test('mobile coarse-pointer plus opens native image picker directly with file fallback', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(window, 'matchMedia', {
       writable: true,
@@ -115,8 +115,13 @@ test('mobile coarse-pointer plus opens native capture directly with file fallbac
   await page.getByRole('button', { name: /add back cover/i }).click()
 
   await expect(page.getByRole('dialog')).toBeHidden()
-  await expect(page.getByLabel(/take back cover photo/i)).toHaveAttribute('capture', 'environment')
+  await expect(page.getByLabel(/open native back cover image picker/i)).toHaveAttribute('accept', 'image/*')
+  await expect(page.getByLabel(/open native back cover image picker/i)).not.toHaveAttribute('capture')
   await expect(page.getByRole('button', { name: /choose file instead/i })).toBeVisible()
+
+  await page.getByRole('button', { name: /choose file instead/i }).click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await expect(page.getByLabel(/choose back cover image/i)).toBeVisible()
 })
 
 test('mobile file fallback processes image with OCR when no barcode found', async ({ page }) => {

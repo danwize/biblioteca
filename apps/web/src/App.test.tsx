@@ -116,7 +116,7 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByDisplayValue('Lookup Title')).toBeInTheDocument())
   })
 
-  it('opens native capture directly and exposes file fallback on coarse-pointer device', async () => {
+  it('opens native image picker directly and exposes file fallback on coarse-pointer device', async () => {
     vi.stubGlobal('matchMedia', (query: string) => ({
       matches: query === '(pointer: coarse)',
       media: query,
@@ -132,11 +132,16 @@ describe('App', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /add back cover/i }))
 
-    const nativeInput = screen.getByLabelText(/take back cover photo/i)
-    expect(nativeInput).toHaveAttribute('capture', 'environment')
+    const nativeInput = screen.getByLabelText(/open native back cover image picker/i)
+    expect(nativeInput).toHaveAttribute('accept', 'image/*')
+    expect(nativeInput).not.toHaveAttribute('capture')
     expect(clickSpy).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /choose file instead/i })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /choose file instead/i }))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByLabelText(/choose back cover image/i)).toBeInTheDocument()
   })
 
   it('falls back to OCR when barcode lookup misses', async () => {

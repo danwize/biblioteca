@@ -58,7 +58,7 @@ function App() {
   const [coarsePointer, setCoarsePointer] = useState(false)
   const [cameraAvailable, setCameraAvailable] = useState(false)
   const [pickerCameraReady, setPickerCameraReady] = useState(false)
-  const nativeCaptureInputsRef = useRef<Partial<Record<ImageKind, HTMLInputElement | null>>>({})
+  const nativeImageInputsRef = useRef<Partial<Record<ImageKind, HTMLInputElement | null>>>({})
   const pickerVideoRef = useRef<HTMLVideoElement>(null)
   const pickerStreamRef = useRef<MediaStream | null>(null)
   const lookupSequenceRef = useRef(0)
@@ -137,7 +137,7 @@ function App() {
   function openImagePicker(kind: ImageKind) {
     if (coarsePointer) {
       setMobileFallbackKind(kind)
-      nativeCaptureInputsRef.current[kind]?.click()
+      nativeImageInputsRef.current[kind]?.click()
       return
     }
 
@@ -433,13 +433,12 @@ function App() {
                     {dataUrl && <span className="edit-badge">Edit</span>}
                   </button>
                   <input
-                    ref={(input) => { nativeCaptureInputsRef.current[kind] = input }}
+                    ref={(input) => { nativeImageInputsRef.current[kind] = input }}
                     className="native-capture-input"
                     type="file"
                     accept="image/*"
-                    capture="environment"
                     onChange={(event) => handleImageInput(kind, event.currentTarget)}
-                    aria-label={`Take ${imageLabel(kind)} photo`}
+                    aria-label={`Open native ${imageLabel(kind)} image picker`}
                   />
                   <h3>{imageLabel(kind)}</h3>
                   <p>{kind === 'spine' ? 'Optional' : 'Required'}</p>
@@ -459,19 +458,12 @@ function App() {
             <section className="image-picker-sheet" role="dialog" aria-modal="true" aria-labelledby="image-picker-title" onClick={(event) => event.stopPropagation()}>
               <h2 id="image-picker-title">{imageLabel(activeImageKind)}</h2>
               <p>Use a clear, well-lit image. Barcodes are scanned before OCR.</p>
-              {cameraAvailable && (
-                coarsePointer ? (
-                  <label className="picker-primary-action capture-action">
-                    Take photo
-                    <input type="file" accept="image/*" capture="environment" onChange={(event) => handleImageInput(activeImageKind, event.currentTarget)} aria-label={`Take ${imageLabel(activeImageKind)} photo`} />
-                  </label>
-                ) : (
-                  <div className="picker-camera-panel">
-                    <video ref={pickerVideoRef} aria-label="Camera preview" playsInline muted />
-                    {!pickerCameraReady && <div className="picker-camera-placeholder">Starting camera...</div>}
-                    <button type="button" className="picker-primary-button" disabled={!pickerCameraReady} onClick={() => void takePickerPhoto()}>Take photo</button>
-                  </div>
-                )
+              {cameraAvailable && !coarsePointer && (
+                <div className="picker-camera-panel">
+                  <video ref={pickerVideoRef} aria-label="Camera preview" playsInline muted />
+                  {!pickerCameraReady && <div className="picker-camera-placeholder">Starting camera...</div>}
+                  <button type="button" className="picker-primary-button" disabled={!pickerCameraReady} onClick={() => void takePickerPhoto()}>Take photo</button>
+                </div>
               )}
               <label className="picker-primary-action file-action">
                 Choose file
