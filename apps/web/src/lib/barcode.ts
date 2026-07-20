@@ -2,15 +2,15 @@ import { normalizeIsbn } from './isbn'
 
 export async function detectIsbnBarcode(dataUrl: string): Promise<string | null> {
   const image = await imageFromDataUrl(dataUrl)
-  const candidates = barcodeCandidateCanvases(image)
+  const makeCandidates = () => barcodeCandidates(image)
 
-  const nativeIsbn = await detectWithNativeBarcodeDetector(candidates)
+  const nativeIsbn = await detectWithNativeBarcodeDetector(makeCandidates())
   if (nativeIsbn) return nativeIsbn
 
-  return detectWithZxing(candidates)
+  return detectWithZxing(makeCandidates())
 }
 
-async function detectWithNativeBarcodeDetector(candidates: HTMLCanvasElement[]): Promise<string | null> {
+async function detectWithNativeBarcodeDetector(candidates: Iterable<HTMLCanvasElement>): Promise<string | null> {
   if (!('BarcodeDetector' in window)) return null
 
   try {
@@ -27,7 +27,7 @@ async function detectWithNativeBarcodeDetector(candidates: HTMLCanvasElement[]):
   return null
 }
 
-async function detectWithZxing(candidates: HTMLCanvasElement[]): Promise<string | null> {
+async function detectWithZxing(candidates: Iterable<HTMLCanvasElement>): Promise<string | null> {
   try {
     const [{ BarcodeFormat, DecodeHintType }, { BrowserMultiFormatReader }] = await Promise.all([
       import('@zxing/library'),
@@ -59,10 +59,15 @@ function isLikelyIsbn(value: string): boolean {
   return value.length === 13 && (value.startsWith('978') || value.startsWith('979'))
 }
 
-function barcodeCandidateCanvases(image: HTMLImageElement): HTMLCanvasElement[] {
+function* barcodeCandidates(image: HTMLImageElement): Generator<HTMLCanvasElement> {
   const width = image.naturalWidth || image.width
   const height = image.naturalHeight || image.height
+
   const fullSize = cropCanvas(image, { x: 0, y: 0, width, height })
+  yield fullSize
+  yield scaleCanvas(fullSize, 2200)
+  yield scaleCanvas(fullSize, 1400)
+
   const regions = [
     { x: 0, y: height * 0.45, width, height: height * 0.55 },
     { x: width * 0.35, y: height * 0.45, width: width * 0.65, height: height * 0.55 },
@@ -71,13 +76,15 @@ function barcodeCandidateCanvases(image: HTMLImageElement): HTMLCanvasElement[] 
     { x: 0, y: height * 0.25, width, height: height * 0.5 }
   ]
 
-  const crops = regions.flatMap((region) => {
+  for (const region of regions) {
     const crop = cropCanvas(image, region)
     const scaled = scaleCanvas(crop, 1600)
-    return [crop, scaled, rotateCanvas(scaled, 90), rotateCanvas(scaled, -90), rotateCanvas(scaled, 180)]
-  })
-
-  return [fullSize, scaleCanvas(fullSize, 2200), scaleCanvas(fullSize, 1400), ...crops]
+    yield crop
+    yield scaled
+    yield rotateCanvas(scaled, 90)
+    yield rotateCanvas(scaled, -90)
+    yield rotateCanvas(scaled, 180)
+  }
 }
 
 function cropCanvas(

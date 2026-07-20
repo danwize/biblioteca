@@ -109,7 +109,7 @@ export function applyOcrToDraft(
       authors: ocrValue('authors', values.authors, draft.authors, sources),
       isbn13: ocrValue('isbn13', values.isbn13, draft.isbn13, sources),
       isbn10: ocrValue('isbn10', values.isbn10, draft.isbn10, sources),
-      ocrText: suggestion.rawText
+      ocrText: draft.ocrText ? `${draft.ocrText}\n\n${suggestion.rawText}` : suggestion.rawText
     },
     sources: markAutofilledSources(sources, values, 'ocr')
   }
