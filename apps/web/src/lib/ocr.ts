@@ -5,6 +5,7 @@ export type OcrSuggestion = {
   isbn: string | null
   title: string | null
   authors: string[]
+  series: string | null
 }
 
 export async function recognizeBookText(image: Blob): Promise<OcrSuggestion> {
@@ -13,12 +14,14 @@ export async function recognizeBookText(image: Blob): Promise<OcrSuggestion> {
   const rawText = result.data.text.trim()
   const lines = rawText.split('\n').map(cleanLine).filter(Boolean)
   const byLine = lines.find((line) => /^by\s+/i.test(line))
+  const seriesLine = lines.find((line) => /^series\s*:/i.test(line))
 
   return {
     rawText,
     isbn: extractIsbn(rawText),
     title: findTitleCandidate(lines),
-    authors: byLine ? [byLine.replace(/^by\s+/i, '').trim()] : []
+    authors: byLine ? [byLine.replace(/^by\s+/i, '').trim()] : [],
+    series: seriesLine ? seriesLine.replace(/^series\s*:/i, '').trim() : null
   }
 }
 
@@ -26,12 +29,14 @@ export function parseOcrSuggestion(rawText: string): OcrSuggestion {
   const trimmedText = rawText.trim()
   const lines = trimmedText.split('\n').map(cleanLine).filter(Boolean)
   const byLine = lines.find((line) => /^by\s+/i.test(line))
+  const seriesLine = lines.find((line) => /^series\s*:/i.test(line))
 
   return {
     rawText: trimmedText,
     isbn: extractIsbn(trimmedText),
     title: findTitleCandidate(lines),
-    authors: byLine ? [byLine.replace(/^by\s+/i, '').trim()] : []
+    authors: byLine ? [byLine.replace(/^by\s+/i, '').trim()] : [],
+    series: seriesLine ? seriesLine.replace(/^series\s*:/i, '').trim() : null
   }
 }
 
