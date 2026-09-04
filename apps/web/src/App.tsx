@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import './App.css'
 import { CONFIRM_IMPORT, LIST_COPIES, LOOKUP_BOOK, START_IMPORT } from './graphql/operations'
 import { graphqlRequest } from './lib/graphql'
 import { normalizeIsbn } from './lib/isbn'
 import { recognizeBookText, type OcrSuggestion } from './lib/ocr'
+import { BrowserMultiFormatReader } from '@zxing/browser'
 
 type PhysicalCopy = {
   id: string
@@ -45,6 +46,8 @@ type Draft = {
   ocrText: string
 }
 
+type Capture = { kind: 'front' | 'back' | 'spine' | 'additional'; dataUrl: string }
+
 const emptyDraft: Draft = {
   importSessionId: null,
   title: '',
@@ -70,7 +73,9 @@ function App() {
   const [message, setMessage] = useState('')
   const [isBusy, setIsBusy] = useState(false)
   const [cameraActive, setCameraActive] = useState(false)
-  const [capturedImage, setCapturedImage] = useState<string | null>(null)
+  const [captures, setCaptures] = useState<Capture[]>([])
+  const [captureKind, setCaptureKind] = useState<Capture['kind']>('front')
+  const [isProcessingCaptures, setIsProcessingCaptures] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
 
@@ -153,26 +158,76 @@ function App() {
 
   async function captureImage() {
     const video = videoRef.current
-    if (!video) return
+    if (!video || video.readyState < HTMLMediaElement.HAVE_METADATA || !video.videoWidth || !video.videoHeight) {
+      setMessage('Camera is still preparing. Hold on a moment, then try again.')
+      return
+    }
 
     const canvas = document.createElement('canvas')
     canvas.width = video.videoWidth
     canvas.height = video.videoHeight
     canvas.getContext('2d')?.drawImage(video, 0, 0)
     const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
-    setCapturedImage(dataUrl)
-    setMessage('Image captured. Running client-side OCR...')
+    await addCapture(dataUrl, captureKind)
+  }
 
-    canvas.toBlob(async (blob) => {
-      if (!blob) return
-      try {
-        const suggestion = await recognizeBookText(blob)
-        applyOcrSuggestion(suggestion)
-        setMessage('OCR completed. Review the suggested fields.')
-      } catch {
-        setMessage('Image captured. OCR was unavailable, so use barcode lookup or manual entry.')
+  async function addCapture(dataUrl: string, kind: Capture['kind']) {
+    const capture = { dataUrl, kind }
+    setCaptures((current) => [...current, capture])
+    setMessage('Photo captured. Checking for an ISBN barcode...')
+    try {
+      const reader = new BrowserMultiFormatReader()
+      const result = await reader.decodeFromImageUrl(dataUrl)
+      const detected = normalizeIsbn(result.getText())
+      if (detected.length === 10 || detected.length === 13) {
+        setMessage(`ISBN ${detected} found. Looking up book metadata...`)
+        await lookupByIsbn(detected)
+        return
       }
-    }, 'image/jpeg', 0.92)
+    } catch {
+      // A photo without a barcode is expected; OCR runs when the session is done.
+    }
+    setMessage(`${labelForCapture(kind)} saved. Capture the next side or choose Done.`)
+    if (kind === 'front') setCaptureKind('back')
+  }
+
+  async function addUploadedCapture(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = reject
+      reader.readAsDataURL(file)
+    })
+    await addCapture(dataUrl, captureKind)
+  }
+
+  async function finishCapture() {
+    if (!captures.length) {
+      setMessage('Capture at least one photo before selecting Done.')
+      return
+    }
+    setIsProcessingCaptures(true)
+    setMessage('Reading all captured photos for title, authors, series, and ISBN...')
+    try {
+      const suggestions = await Promise.all(captures.map(async ({ dataUrl }) => {
+        const response = await fetch(dataUrl)
+        return recognizeBookText(await response.blob())
+      }))
+      suggestions.forEach((suggestion) => applyOcrSuggestion(suggestion))
+      setDraft((current) => ({ ...current, ocrText: suggestions.map((suggestion) => suggestion.rawText).filter(Boolean).join('\n\n') }))
+      setMessage('Capture complete. Review and correct the suggested metadata before importing.')
+    } catch {
+      setMessage('Capture complete. OCR was unavailable, so review or enter the metadata manually.')
+    } finally {
+      setIsProcessingCaptures(false)
+    }
+  }
+
+  function labelForCapture(kind: Capture['kind']) {
+    return { front: 'Front cover', back: 'Back cover', spine: 'Spine', additional: 'Additional photo' }[kind]
   }
 
   function applyOcrSuggestion(suggestion: OcrSuggestion) {
@@ -180,6 +235,7 @@ function App() {
       ...current,
       title: current.title || suggestion.title || '',
       authors: current.authors || suggestion.authors.join(', '),
+      series: current.series || suggestion.series || '',
       isbn13: current.isbn13 || (suggestion.isbn?.length === 13 ? suggestion.isbn : ''),
       isbn10: current.isbn10 || (suggestion.isbn?.length === 10 ? suggestion.isbn : ''),
       ocrText: suggestion.rawText
@@ -215,7 +271,8 @@ function App() {
       })
       setMessage('Book imported.')
       setDraft(emptyDraft)
-      setCapturedImage(null)
+      setCaptures([])
+      setCaptureKind('front')
       await loadCopies()
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Import failed.')
@@ -263,10 +320,19 @@ function App() {
         <div className="camera-card">
           <video ref={videoRef} aria-label="Book scanner camera preview" playsInline muted />
           {!cameraActive && <div className="camera-placeholder">Camera preview</div>}
-          <div className="camera-actions">
-            <button type="button" disabled={!cameraActive} onClick={captureImage}>Capture cover/back</button>
+          <div className="capture-guide" aria-live="polite">
+            <strong>Next: {labelForCapture(captureKind)}</strong>
+            <span>{captureKind === 'front' ? 'Start with the front cover.' : captureKind === 'back' ? 'Now capture the back cover for ISBNs.' : 'Optional for books with useful extra detail.'}</span>
           </div>
-          {capturedImage && <img className="capture-preview" src={capturedImage} alt="Captured book" />}
+          <div className="camera-actions">
+            <button type="button" disabled={!cameraActive || isProcessingCaptures} onClick={() => void captureImage()}>Capture {labelForCapture(captureKind).toLowerCase()}</button>
+            <label className="upload-button">Use a photo<input type="file" accept="image/*" capture="environment" onChange={(event) => void addUploadedCapture(event)} /></label>
+          </div>
+          <div className="optional-captures" aria-label="Optional capture types">
+            {(['spine', 'additional'] as const).map((kind) => <button key={kind} type="button" className="secondary" onClick={() => setCaptureKind(kind)}>Add {labelForCapture(kind).toLowerCase()}</button>)}
+          </div>
+          {captures.length > 0 && <div className="capture-strip" aria-label="Captured photos">{captures.map((capture, index) => <figure key={`${capture.kind}-${index}`}><img src={capture.dataUrl} alt={`${labelForCapture(capture.kind)} captured`} /><figcaption>{labelForCapture(capture.kind)}</figcaption></figure>)}</div>}
+          <button type="button" className="done-button" disabled={!captures.length || isProcessingCaptures} onClick={() => void finishCapture()}>Done</button>
         </div>
 
         <form className="import-form" onSubmit={(event) => { event.preventDefault(); void saveImport() }}>
