@@ -8,6 +8,6 @@ export default defineConfig({
   webServer: process.env.BIBLIOTECA_BASE_URL ? undefined : {
     command: 'npm run dev --prefix ../../apps/web -- --host 127.0.0.1',
     url: 'http://localhost:5173',
-    reuseExistingServer: true
+    reuseExistingServer: !process.env.CI
   }
 })

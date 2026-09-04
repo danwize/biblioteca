@@ -59,7 +59,6 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .capture-strip figure { margin: 0; }
 .capture-strip img { aspect-ratio: 1; border-radius: 12px; display: block; object-fit: cover; width: 100%; }
 .capture-strip figcaption { color: #6f6049; font-size: 0.75rem; margin-top: 0.25rem; }
-.capture-preview { border-radius: 16px; display: block; margin-top: 1rem; max-height: 220px; object-fit: contain; width: 100%; }
 .import-form { display: grid; gap: 0.85rem; }
 label { display: grid; gap: 0.35rem; font-size: 0.88rem; font-weight: 800; }
 input, textarea {
