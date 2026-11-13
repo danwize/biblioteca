@@ -30,7 +30,7 @@ docker compose up --build
 
 ## Local HTTPS For Camera Testing
 
-Browsers allow camera access only from HTTPS origins, or from `localhost` on the same computer. Phone testing over a LAN IP needs HTTPS with a certificate the phone trusts.
+The desktop in-browser camera preview requires HTTPS. On mobile and tablet (coarse-pointer) devices, the app uses the native OS image picker instead of the camera API, so HTTPS is not required for the mobile scan flow. Desktop testing over a LAN IP still needs HTTPS with a certificate the device trusts.
 
 Generate a local certificate:
 
@@ -54,7 +54,7 @@ https://biblioteca.local:8443
 Notes:
 
 - `mkcert` is recommended because it creates locally trusted certificates.
-- For phone testing, the phone must trust the same mkcert root CA or the browser may still block camera access.
+- For desktop testing from another device over LAN, the device must trust the same mkcert root CA or the browser will block the in-app camera preview.
 - The HTTPS proxy is optional. Without it, use `docker compose up --build` and browse `http://localhost:8081` from the same computer.
 - In production on TrueNAS behind pfSense HAProxy, do not run the `https` profile. Let pfSense terminate TLS and forward HTTP to the `web` service.
 
@@ -83,8 +83,9 @@ npm run dev --prefix apps/web
 
 - Works and physical copies are separate tables.
 - Book metadata lookup uses Open Library by ISBN.
-- Camera capture runs in the browser.
-- Client-side OCR uses Tesseract.js as a no-server-resource fallback.
+- On desktop, an in-browser camera preview captures images; on mobile and tablet (coarse-pointer), the native OS image picker is used instead.
+- Barcode detection runs first on back cover and spine captures using the native `BarcodeDetector` API with a ZXing fallback; a matched ISBN triggers metadata lookup without OCR.
+- Client-side OCR (Tesseract.js) runs as a fallback when barcode detection misses or is unavailable, and exclusively on front cover captures.
 - Users review and correct fields before import.
 - Physical duplicate copies are modeled with `copy_number`.
 
