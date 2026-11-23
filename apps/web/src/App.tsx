@@ -219,7 +219,10 @@ function App() {
         }
       }
       updateDraftState({ ...draftRef.current, ocrText: '' })
-      suggestions.forEach((suggestion) => applyOcrSuggestion(suggestion))
+      let lookupIsbn = isbn
+      suggestions.forEach((suggestion) => {
+        lookupIsbn = applyOcrSuggestion(suggestion, lookupIsbn)
+      })
       if (!suggestions.length) {
         setMessage('Capture complete. OCR was unavailable, so review or enter the metadata manually.')
       } else {
@@ -236,13 +239,21 @@ function App() {
     return { front: 'Front cover', back: 'Back cover', spine: 'Spine', additional: 'Additional photo' }[kind]
   }
 
-  function applyOcrSuggestion(suggestion: OcrSuggestion) {
+  function applyOcrSuggestion(suggestion: OcrSuggestion, lookupIsbn: string): string {
     const next = applyOcrToDraft(draftRef.current, fieldSourcesRef.current, suggestion)
     updateDraftState(next.draft)
     updateFieldSources(next.sources)
-    if (suggestion.isbn && !isbn && fieldSourcesRef.current.isbn13 !== 'lookup' && fieldSourcesRef.current.isbn13 !== 'manual') {
+    if (suggestion.isbn && !lookupIsbn && fieldSourcesRef.current.isbn13 !== 'lookup' && fieldSourcesRef.current.isbn13 !== 'manual') {
       setIsbn(suggestion.isbn)
+      return suggestion.isbn
     }
+    return lookupIsbn
+  }
+
+  function updateCaptures(updated: Capture[]) {
+    setCaptures(updated)
+    const required = nextRequiredCaptureKind(updated)
+    setCaptureKind((current) => required === 'additional' && (current === 'spine' || current === 'additional') ? current : required)
   }
 
   async function saveImport() {
@@ -364,7 +375,7 @@ function App() {
           <div className="optional-captures" aria-label="Optional capture types">
             {(['spine', 'additional'] as const).map((kind) => <button key={kind} type="button" className="secondary" disabled={isProcessingCaptures || isBusy || isDetecting} onClick={() => setCaptureKind(kind)}>Add {labelForCapture(kind).toLowerCase()}</button>)}
           </div>
-          {captures.length > 0 && <div className="capture-strip" aria-label="Captured photos">{captures.map((capture, index) => <figure key={capture.id}><img src={capture.dataUrl} alt={`${labelForCapture(capture.kind)} captured`} /><figcaption>{labelForCapture(capture.kind)}</figcaption><select aria-label={`Relabel photo ${index + 1}`} value={capture.kind} disabled={isProcessingCaptures || isBusy || isDetecting} onChange={(event) => setCaptures((current) => current.map((item) => item.id === capture.id ? { ...item, kind: event.target.value as Capture['kind'] } : item))}><option value="front">Front cover</option><option value="back">Back cover</option><option value="spine">Spine</option><option value="additional">Additional photo</option></select><button type="button" className="secondary" disabled={isProcessingCaptures || isBusy || isDetecting} onClick={() => { detectionSequenceRef.current += 1; setCaptures((current) => current.filter((item) => item.id !== capture.id)) }}>Remove</button></figure>)}</div>}
+          {captures.length > 0 && <div className="capture-strip" aria-label="Captured photos">{captures.map((capture, index) => <figure key={capture.id}><img src={capture.dataUrl} alt={`${labelForCapture(capture.kind)} captured`} /><figcaption>{labelForCapture(capture.kind)}</figcaption><select aria-label={`Relabel photo ${index + 1}`} value={capture.kind} disabled={isProcessingCaptures || isBusy || isDetecting} onChange={(event) => updateCaptures(captures.map((item) => item.id === capture.id ? { ...item, kind: event.target.value as Capture['kind'] } : item))}><option value="front">Front cover</option><option value="back">Back cover</option><option value="spine">Spine</option><option value="additional">Additional photo</option></select><button type="button" className="secondary" disabled={isProcessingCaptures || isBusy || isDetecting} onClick={() => { detectionSequenceRef.current += 1; updateCaptures(captures.filter((item) => item.id !== capture.id)) }}>Remove</button></figure>)}</div>}
           <button type="button" className="done-button" disabled={!captures.length || isProcessingCaptures || isBusy || isDetecting} onClick={() => void finishCapture()}>Done</button>
         </div>
 
