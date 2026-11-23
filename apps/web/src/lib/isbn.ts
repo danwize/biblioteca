@@ -17,7 +17,7 @@ export function isValidIsbn10(candidate: string): boolean {
 
 export function extractIsbn(text: string): string | null {
   for (const line of text.split(/\r?\n/)) {
-    const compact = line.replace(/[-\s]/g, '')
+    const compact = line.replace(/\bISBN(?:[-\s]?(?:10|13))?\b/ig, ' ').replace(/[-\s]/g, '')
     const isbn13 = (compact.match(/97[89][0-9]{10}/g) ?? []).find(isValidIsbn13)
     if (isbn13) return isbn13
 

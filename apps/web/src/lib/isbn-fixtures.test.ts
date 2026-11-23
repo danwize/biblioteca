@@ -17,6 +17,7 @@ describe('captured barcode ISBN fixtures', () => {
   })
 
   it('keeps a following line from becoming part of an ISBN-10 candidate', () => {
-    expect(extractIsbn('ISBN 0-486-21437-5\n1966')).toBeNull()
+    expect(extractIsbn('ISBN 0-486-21437-0\n1966')).toBe('0486214370')
+    expect(extractIsbn('ISBN-10 0-486-21437-0')).toBe('0486214370')
   })
 })

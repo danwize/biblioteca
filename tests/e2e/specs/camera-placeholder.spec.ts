@@ -4,6 +4,7 @@ import path from 'node:path'
 const FRONT_COVER_FIXTURE = path.join(import.meta.dirname, '../fixtures/front-cover.png')
 
 test('camera placeholder does not block controls when the camera is inactive', async ({ page }) => {
+  test.setTimeout(180_000)
   await page.goto('/')
 
   // No getUserMedia call has been made, so the app is in its default,

@@ -141,25 +141,39 @@ function App() {
     canvas.height = video.videoHeight
     canvas.getContext('2d')?.drawImage(video, 0, 0)
     const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
-    await addCapture(dataUrl, captureKind)
+    const kindAtCapture = captureKind
+    await addCapture(dataUrl, kindAtCapture)
   }
 
   async function addCapture(dataUrl: string, kind: Capture['kind']) {
     const capture = { dataUrl, kind }
     setCaptures((current) => [...current, capture])
+    const nextKind = nextCaptureKind(kind, captures)
+    setCaptureKind(nextKind)
     setMessage('Photo captured. Checking for an ISBN barcode...')
+    let detectedIsbn: string | null = null
     try {
-      const detected = await detectIsbn(dataUrl)
-      if (detected) {
-        setMessage(`ISBN ${detected} found. Looking up book metadata...`)
-        await lookupByIsbn(detected)
+      detectedIsbn = await detectIsbn(dataUrl)
+      if (detectedIsbn) {
+        setIsbn(detectedIsbn)
+        setMessage(`ISBN ${detectedIsbn} found. Looking up book metadata...`)
+        await lookupByIsbn(detectedIsbn)
       }
     } catch {
       // A photo without a barcode is expected; OCR runs when the session is done.
     }
-    setMessage(`${labelForCapture(kind)} saved. Capture the next side or choose Done.`)
-    if (kind === 'front') setCaptureKind('back')
-    else if (kind === 'back') setCaptureKind('additional')
+    if (!detectedIsbn) setMessage(`${labelForCapture(kind)} saved. Capture the next side or choose Done.`)
+  }
+
+  function nextCaptureKind(kind: Capture['kind'], currentCaptures: Capture[]) {
+    return requiredCaptureKind([...currentCaptures, { kind, dataUrl: '' }])
+  }
+
+  function requiredCaptureKind(currentCaptures: Capture[]) {
+    const kinds = new Set(currentCaptures.map((capture) => capture.kind))
+    if (!kinds.has('front')) return 'front'
+    if (!kinds.has('back')) return 'back'
+    return 'additional'
   }
 
   async function addUploadedCapture(event: ChangeEvent<HTMLInputElement>) {
@@ -184,17 +198,21 @@ function App() {
     setMessage('Reading all captured photos for title, authors, series, and ISBN...')
     try {
       const suggestions: OcrSuggestion[] = []
+      let failedCount = 0
       for (const { dataUrl } of captures) {
         try {
           const response = await fetch(dataUrl)
           suggestions.push(await recognizeBookText(await response.blob()))
         } catch {
-          // Keep successful OCR suggestions when one unusual photo cannot be read.
+          failedCount += 1
         }
       }
       suggestions.forEach((suggestion) => applyOcrSuggestion(suggestion))
-      setDraft((current) => ({ ...current, ocrText: suggestions.map((suggestion) => suggestion.rawText).filter(Boolean).join('\n\n') }))
-      setMessage('Capture complete. Review and correct the suggested metadata before importing.')
+      if (!suggestions.length) {
+        setMessage('Capture complete. OCR was unavailable, so review or enter the metadata manually.')
+      } else {
+        setMessage(failedCount ? `Capture complete. ${failedCount} photo${failedCount === 1 ? '' : 's'} could not be read; review the suggestions.` : 'Capture complete. Review and correct the suggested metadata before importing.')
+      }
     } catch {
       setMessage('Capture complete. OCR was unavailable, so review or enter the metadata manually.')
     } finally {
@@ -216,7 +234,12 @@ function App() {
   }
 
   async function saveImport() {
+    if (!captures.some((capture) => capture.kind === 'front') || !captures.some((capture) => capture.kind === 'back')) {
+      setMessage('Capture at least a front cover and back cover before importing.')
+      return
+    }
     lookupSequenceRef.current += 1
+    const capturesToUpload = [...captures]
     setIsBusy(true)
     try {
       const result = await graphqlRequest<{ confirmBookImport: { id: string } }>(CONFIRM_IMPORT, {
@@ -240,19 +263,26 @@ function App() {
           ocrText: draft.ocrText || null
         }
       })
-      setMessage('Book imported.')
-      for (const capture of captures) {
-        const formData = new FormData()
-        formData.append('physicalCopyId', result.confirmBookImport.id)
-        formData.append('kind', capture.kind)
-        formData.append('file', dataUrlToBlob(capture.dataUrl), `${capture.kind}.jpg`)
-        const response = await fetch('/images', { method: 'POST', body: formData })
-        if (!response.ok) setMessage('Book imported, but an image upload failed.')
-      }
       updateDraftState(emptyDraft)
       updateFieldSources(emptyFieldSources)
       setCaptures([])
       setCaptureKind('front')
+      setIsbn('')
+      setMessage('Book imported.')
+      let uploadFailed = false
+      for (const capture of capturesToUpload) {
+        const formData = new FormData()
+        formData.append('physicalCopyId', result.confirmBookImport.id)
+        formData.append('kind', capture.kind === 'front' ? 'front_cover' : capture.kind === 'back' ? 'back_cover' : capture.kind)
+        formData.append('file', dataUrlToBlob(capture.dataUrl), `${capture.kind}.jpg`)
+        try {
+          const response = await fetch('/images', { method: 'POST', body: formData })
+          if (!response.ok) uploadFailed = true
+        } catch {
+          uploadFailed = true
+        }
+      }
+      if (uploadFailed) setMessage('Book imported, but one or more image uploads failed.')
       await loadCopies()
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Import failed.')
@@ -315,14 +345,14 @@ function App() {
             <span>{captureKind === 'front' ? 'Start with the front cover.' : captureKind === 'back' ? 'Now capture the back cover for ISBNs.' : 'Optional for books with useful extra detail.'}</span>
           </div>
           <div className="camera-actions">
-            <button type="button" disabled={!cameraActive || isProcessingCaptures} onClick={() => void captureImage()}>Capture {labelForCapture(captureKind).toLowerCase()}</button>
+            <button type="button" disabled={!cameraActive || isProcessingCaptures || isBusy} onClick={() => void captureImage()}>Capture {labelForCapture(captureKind).toLowerCase()}</button>
             <label className="upload-button">Use a photo<input type="file" accept="image/*" disabled={isProcessingCaptures || isBusy} onChange={(event) => void addUploadedCapture(event)} /></label>
           </div>
           <div className="optional-captures" aria-label="Optional capture types">
             {(['spine', 'additional'] as const).map((kind) => <button key={kind} type="button" className="secondary" disabled={isProcessingCaptures || isBusy} onClick={() => setCaptureKind(kind)}>Add {labelForCapture(kind).toLowerCase()}</button>)}
           </div>
-          {captures.length > 0 && <div className="capture-strip" aria-label="Captured photos">{captures.map((capture, index) => <figure key={`${capture.kind}-${index}`}><img src={capture.dataUrl} alt={`${labelForCapture(capture.kind)} captured`} /><figcaption>{labelForCapture(capture.kind)}</figcaption></figure>)}</div>}
-          <button type="button" className="done-button" disabled={!captures.length || isProcessingCaptures} onClick={() => void finishCapture()}>Done</button>
+          {captures.length > 0 && <div className="capture-strip" aria-label="Captured photos">{captures.map((capture, index) => <figure key={`${capture.kind}-${index}`}><img src={capture.dataUrl} alt={`${labelForCapture(capture.kind)} captured`} /><figcaption>{labelForCapture(capture.kind)}</figcaption><select aria-label={`Relabel photo ${index + 1}`} value={capture.kind} disabled={isProcessingCaptures || isBusy} onChange={(event) => setCaptures((current) => { const next = current.map((item, itemIndex) => itemIndex === index ? { ...item, kind: event.target.value as Capture['kind'] } : item); setCaptureKind(requiredCaptureKind(next)); return next })}><option value="front">Front cover</option><option value="back">Back cover</option><option value="spine">Spine</option><option value="additional">Additional photo</option></select><button type="button" className="secondary" disabled={isProcessingCaptures || isBusy} onClick={() => setCaptures((current) => { const next = current.filter((_, itemIndex) => itemIndex !== index); setCaptureKind(requiredCaptureKind(next)); return next })}>Remove</button></figure>)}</div>}
+          <button type="button" className="done-button" disabled={!captures.length || isProcessingCaptures || isBusy} onClick={() => void finishCapture()}>Done</button>
         </div>
 
         <form className="import-form" onSubmit={(event) => { event.preventDefault(); void saveImport() }}>
