@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import './App.css'
 import { CONFIRM_IMPORT, LIST_COPIES, LOOKUP_BOOK, START_IMPORT } from './graphql/operations'
 import { graphqlRequest } from './lib/graphql'
-import { extractIsbn, normalizeIsbn } from './lib/isbn'
+import { normalizeIsbn } from './lib/isbn'
 import { recognizeBookText, type OcrSuggestion } from './lib/ocr'
 import { detectIsbn } from './lib/barcode'
 
