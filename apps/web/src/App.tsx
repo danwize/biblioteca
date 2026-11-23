@@ -5,6 +5,15 @@ import { graphqlRequest } from './lib/graphql'
 import { normalizeIsbn } from './lib/isbn'
 import { recognizeBookText, type OcrSuggestion } from './lib/ocr'
 import { detectIsbn } from './lib/barcode'
+import {
+  applyLookupToDraft,
+  applyOcrToDraft,
+  emptyDraft,
+  emptyFieldSources,
+  type Draft,
+  type DraftFieldSources,
+  type LookupBook
+} from './lib/draftAutofill'
 
 type PhysicalCopy = {
   id: string
@@ -17,58 +26,14 @@ type PhysicalCopy = {
   copyNumber: number
 }
 
-type LookupBook = {
-  title: string | null
-  subtitle: string | null
-  authors: string[]
-  isbn13: string | null
-  isbn10: string | null
-  publisher: string | null
-  publishedDate: string | null
-  pageCount: number | null
-}
-
-type Draft = {
-  importSessionId: string | null
-  title: string
-  subtitle: string
-  authors: string
-  isbn13: string
-  isbn10: string
-  publisher: string
-  publishedDate: string
-  pageCount: string
-  series: string
-  seriesNumber: string
-  format: string
-  condition: string
-  notes: string
-  ocrText: string
-}
-
 type Capture = { kind: 'front' | 'back' | 'spine' | 'additional'; dataUrl: string }
-
-const emptyDraft: Draft = {
-  importSessionId: null,
-  title: '',
-  subtitle: '',
-  authors: '',
-  isbn13: '',
-  isbn10: '',
-  publisher: '',
-  publishedDate: '',
-  pageCount: '',
-  series: '',
-  seriesNumber: '',
-  format: '',
-  condition: '',
-  notes: '',
-  ocrText: ''
-}
 
 function App() {
   const [copies, setCopies] = useState<PhysicalCopy[]>([])
   const [draft, setDraft] = useState<Draft>(emptyDraft)
+  const draftRef = useRef<Draft>(emptyDraft)
+  const [, setFieldSources] = useState<DraftFieldSources>(emptyFieldSources)
+  const fieldSourcesRef = useRef<DraftFieldSources>(emptyFieldSources)
   const [isbn, setIsbn] = useState('')
   const [message, setMessage] = useState('')
   const [isBusy, setIsBusy] = useState(false)
@@ -78,6 +43,8 @@ function App() {
   const [isProcessingCaptures, setIsProcessingCaptures] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  const lookupSequenceRef = useRef(0)
+  const pendingLookupCountRef = useRef(0)
 
   useEffect(() => {
     void loadCopies()
@@ -94,31 +61,37 @@ function App() {
     if (!normalized) return
 
     setIsBusy(true)
+    const lookupSequence = lookupSequenceRef.current + 1
+    lookupSequenceRef.current = lookupSequence
+    pendingLookupCountRef.current += 1
     setMessage('Looking up book metadata...')
     try {
+      const currentDraft = draftRef.current
       const sessionData = await graphqlRequest<{ startImportSession: { id: string } }>(START_IMPORT, {
-        input: { scannedIsbn: normalized, detectedTitle: null, detectedAuthors: [], ocrText: draft.ocrText || null }
+        input: { scannedIsbn: normalized, detectedTitle: null, detectedAuthors: [], ocrText: currentDraft.ocrText || null }
       })
       const data = await graphqlRequest<{ lookupBookByIsbn: LookupBook | null }>(LOOKUP_BOOK, { isbn: normalized })
+      if (lookupSequence !== lookupSequenceRef.current) return
+      const next = applyLookupToDraft(draftRef.current, fieldSourcesRef.current, data.lookupBookByIsbn, normalized, sessionData.startImportSession.id)
+      updateDraftState(next.draft)
+      updateFieldSources(next.sources)
       const book = data.lookupBookByIsbn
-      setDraft((current) => ({
-        ...current,
-        importSessionId: sessionData.startImportSession.id,
-        title: book?.title ?? current.title,
-        subtitle: book?.subtitle ?? current.subtitle,
-        authors: book?.authors.join(', ') ?? current.authors,
-        isbn13: book?.isbn13 ?? (normalized.length === 13 ? normalized : current.isbn13),
-        isbn10: book?.isbn10 ?? (normalized.length === 10 ? normalized : current.isbn10),
-        publisher: book?.publisher ?? current.publisher,
-        publishedDate: book?.publishedDate ?? current.publishedDate,
-        pageCount: book?.pageCount?.toString() ?? current.pageCount
-      }))
       setMessage(book ? 'Metadata found. Review and correct before importing.' : 'No metadata found. Fill the form manually.')
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Lookup failed.')
     } finally {
-      setIsBusy(false)
+      if (--pendingLookupCountRef.current === 0) setIsBusy(false)
     }
+  }
+
+  function updateDraftState(next: Draft) {
+    draftRef.current = next
+    setDraft(next)
+  }
+
+  function updateFieldSources(next: DraftFieldSources) {
+    fieldSourcesRef.current = next
+    setFieldSources(next)
   }
 
   async function startCamera() {
@@ -180,13 +153,13 @@ function App() {
       if (detected) {
         setMessage(`ISBN ${detected} found. Looking up book metadata...`)
         await lookupByIsbn(detected)
-        return
       }
     } catch {
       // A photo without a barcode is expected; OCR runs when the session is done.
     }
     setMessage(`${labelForCapture(kind)} saved. Capture the next side or choose Done.`)
     if (kind === 'front') setCaptureKind('back')
+    else if (kind === 'back') setCaptureKind('additional')
   }
 
   async function addUploadedCapture(event: ChangeEvent<HTMLInputElement>) {
@@ -212,8 +185,12 @@ function App() {
     try {
       const suggestions: OcrSuggestion[] = []
       for (const { dataUrl } of captures) {
-        const response = await fetch(dataUrl)
-        suggestions.push(await recognizeBookText(await response.blob()))
+        try {
+          const response = await fetch(dataUrl)
+          suggestions.push(await recognizeBookText(await response.blob()))
+        } catch {
+          // Keep successful OCR suggestions when one unusual photo cannot be read.
+        }
       }
       suggestions.forEach((suggestion) => applyOcrSuggestion(suggestion))
       setDraft((current) => ({ ...current, ocrText: suggestions.map((suggestion) => suggestion.rawText).filter(Boolean).join('\n\n') }))
@@ -230,24 +207,19 @@ function App() {
   }
 
   function applyOcrSuggestion(suggestion: OcrSuggestion) {
-    setDraft((current) => ({
-      ...current,
-      title: current.title || suggestion.title || '',
-      authors: current.authors || suggestion.authors.join(', '),
-      series: current.series || suggestion.series || '',
-      isbn13: current.isbn13 || (suggestion.isbn?.length === 13 ? suggestion.isbn : ''),
-      isbn10: current.isbn10 || (suggestion.isbn?.length === 10 ? suggestion.isbn : ''),
-      ocrText: suggestion.rawText
-    }))
+    const next = applyOcrToDraft(draftRef.current, fieldSourcesRef.current, suggestion)
+    updateDraftState(next.draft)
+    updateFieldSources(next.sources)
     if (suggestion.isbn) {
       setIsbn(suggestion.isbn)
     }
   }
 
   async function saveImport() {
+    lookupSequenceRef.current += 1
     setIsBusy(true)
     try {
-      await graphqlRequest(CONFIRM_IMPORT, {
+      const result = await graphqlRequest<{ confirmBookImport: { id: string } }>(CONFIRM_IMPORT, {
         importSessionId: draft.importSessionId,
         input: {
           title: draft.title,
@@ -269,7 +241,16 @@ function App() {
         }
       })
       setMessage('Book imported.')
-      setDraft(emptyDraft)
+      for (const capture of captures) {
+        const formData = new FormData()
+        formData.append('physicalCopyId', result.confirmBookImport.id)
+        formData.append('kind', capture.kind)
+        formData.append('file', dataUrlToBlob(capture.dataUrl), `${capture.kind}.jpg`)
+        const response = await fetch('/images', { method: 'POST', body: formData })
+        if (!response.ok) setMessage('Book imported, but an image upload failed.')
+      }
+      updateDraftState(emptyDraft)
+      updateFieldSources(emptyFieldSources)
       setCaptures([])
       setCaptureKind('front')
       await loadCopies()
@@ -281,7 +262,15 @@ function App() {
   }
 
   function updateDraft(field: keyof Draft, value: string) {
-    setDraft((current) => ({ ...current, [field]: value }))
+    updateDraftState({ ...draftRef.current, [field]: value })
+    updateFieldSources({ ...fieldSourcesRef.current, [field]: 'manual' })
+  }
+
+  function dataUrlToBlob(dataUrl: string): Blob {
+    const [header, base64] = dataUrl.split(',')
+    const mime = header.match(/data:(.*);base64/)?.[1] ?? 'image/jpeg'
+    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0))
+    return new Blob([bytes], { type: mime })
   }
 
   function cameraErrorMessage(error: unknown) {
@@ -327,10 +316,10 @@ function App() {
           </div>
           <div className="camera-actions">
             <button type="button" disabled={!cameraActive || isProcessingCaptures} onClick={() => void captureImage()}>Capture {labelForCapture(captureKind).toLowerCase()}</button>
-            <label className="upload-button">Use a photo<input type="file" accept="image/*" capture="environment" onChange={(event) => void addUploadedCapture(event)} /></label>
+            <label className="upload-button">Use a photo<input type="file" accept="image/*" disabled={isProcessingCaptures || isBusy} onChange={(event) => void addUploadedCapture(event)} /></label>
           </div>
           <div className="optional-captures" aria-label="Optional capture types">
-            {(['spine', 'additional'] as const).map((kind) => <button key={kind} type="button" className="secondary" onClick={() => setCaptureKind(kind)}>Add {labelForCapture(kind).toLowerCase()}</button>)}
+            {(['spine', 'additional'] as const).map((kind) => <button key={kind} type="button" className="secondary" disabled={isProcessingCaptures || isBusy} onClick={() => setCaptureKind(kind)}>Add {labelForCapture(kind).toLowerCase()}</button>)}
           </div>
           {captures.length > 0 && <div className="capture-strip" aria-label="Captured photos">{captures.map((capture, index) => <figure key={`${capture.kind}-${index}`}><img src={capture.dataUrl} alt={`${labelForCapture(capture.kind)} captured`} /><figcaption>{labelForCapture(capture.kind)}</figcaption></figure>)}</div>}
           <button type="button" className="done-button" disabled={!captures.length || isProcessingCaptures} onClick={() => void finishCapture()}>Done</button>
@@ -340,8 +329,8 @@ function App() {
           <label>
             ISBN lookup
             <span className="inline-field">
-              <input value={isbn} onChange={(event) => setIsbn(event.target.value)} placeholder="9780486214375" />
-              <button type="button" disabled={isBusy} onClick={() => void lookupByIsbn()}>Lookup</button>
+              <input value={isbn} onChange={(event) => setIsbn(event.target.value)} placeholder="9780486214375" disabled={isProcessingCaptures || isBusy} />
+              <button type="button" disabled={isBusy || isProcessingCaptures} onClick={() => void lookupByIsbn()}>Lookup</button>
             </span>
           </label>
 
@@ -362,7 +351,7 @@ function App() {
             <label>Format<input value={draft.format} onChange={(event) => updateDraft('format', event.target.value)} placeholder="paperback, hardback" /></label>
           </div>
           <label>Notes<textarea value={draft.notes} onChange={(event) => updateDraft('notes', event.target.value)} /></label>
-          <button type="submit" disabled={isBusy || !draft.title}>Import book</button>
+          <button type="submit" disabled={isBusy || isProcessingCaptures || !draft.title}>Import book</button>
         </form>
       </section>
 

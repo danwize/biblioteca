@@ -1,9 +1,7 @@
 import { expect, test } from '@playwright/test'
+import path from 'node:path'
 
-// A 1x1 PNG fixture, sufficient to exercise the upload -> capture flow
-// without needing a real barcode or camera device. Resolved relative to the
-// playwright config's rootDir (tests/e2e), matching testDir './specs'.
-const FRONT_COVER_FIXTURE = 'fixtures/front-cover.png'
+const FRONT_COVER_FIXTURE = path.join(import.meta.dirname, '../fixtures/front-cover.png')
 
 test('camera placeholder does not block controls when the camera is inactive', async ({ page }) => {
   await page.goto('/')
@@ -29,5 +27,5 @@ test('camera placeholder does not block controls when the camera is inactive', a
   // card, must land on the button rather than being intercepted by the
   // overlay.
   await doneButton.click()
-  await expect(doneButton).toBeDisabled()
+  await expect(page.getByText(/Capture complete|OCR was unavailable/i)).toBeVisible({ timeout: 15000 })
 })

@@ -15,4 +15,8 @@ describe('captured barcode ISBN fixtures', () => {
   it('rejects a mistyped ISBN-13 checksum', () => {
     expect(extractIsbn('9780486214376')).toBeNull()
   })
+
+  it('keeps a following line from becoming part of an ISBN-10 candidate', () => {
+    expect(extractIsbn('ISBN 0-486-21437-5\n1966')).toBeNull()
+  })
 })
