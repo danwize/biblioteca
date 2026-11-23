@@ -5,6 +5,7 @@ import { graphqlRequest } from './lib/graphql'
 import { normalizeIsbn } from './lib/isbn'
 import { recognizeBookText, type OcrSuggestion } from './lib/ocr'
 import { detectIsbn } from './lib/barcode'
+import { hasRequiredCaptures, MISSING_REQUIRED_CAPTURES_MESSAGE, toStoredImageKind, type CaptureKind } from './lib/captureKinds'
 import {
   applyLookupToDraft,
   applyOcrToDraft,
@@ -26,7 +27,7 @@ type PhysicalCopy = {
   copyNumber: number
 }
 
-type Capture = { kind: 'front' | 'back' | 'spine' | 'additional'; dataUrl: string }
+type Capture = { kind: CaptureKind; dataUrl: string }
 
 function App() {
   const [copies, setCopies] = useState<PhysicalCopy[]>([])
@@ -216,6 +217,10 @@ function App() {
   }
 
   async function saveImport() {
+    if (!hasRequiredCaptures(captures)) {
+      setMessage(MISSING_REQUIRED_CAPTURES_MESSAGE)
+      return
+    }
     lookupSequenceRef.current += 1
     setIsBusy(true)
     try {
@@ -244,8 +249,9 @@ function App() {
       for (const capture of captures) {
         const formData = new FormData()
         formData.append('physicalCopyId', result.confirmBookImport.id)
-        formData.append('kind', capture.kind)
-        formData.append('file', dataUrlToBlob(capture.dataUrl), `${capture.kind}.jpg`)
+        const storedKind = toStoredImageKind(capture.kind)
+        formData.append('kind', storedKind)
+        formData.append('file', dataUrlToBlob(capture.dataUrl), `${storedKind}.jpg`)
         const response = await fetch('/images', { method: 'POST', body: formData })
         if (!response.ok) setMessage('Book imported, but an image upload failed.')
       }
