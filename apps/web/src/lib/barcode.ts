@@ -1,4 +1,4 @@
-import { normalizeIsbn } from './isbn'
+import { isValidIsbn13, normalizeIsbn } from './isbn'
 
 export async function detectIsbnBarcode(dataUrl: string): Promise<string | null> {
   const image = await imageFromDataUrl(dataUrl)
@@ -9,6 +9,8 @@ export async function detectIsbnBarcode(dataUrl: string): Promise<string | null>
 
   return detectWithZxing(makeCandidates())
 }
+
+export { detectIsbnBarcode as detectIsbn }
 
 async function detectWithNativeBarcodeDetector(candidates: Iterable<HTMLCanvasElement>): Promise<string | null> {
   if (!('BarcodeDetector' in window)) return null
@@ -56,7 +58,7 @@ async function detectWithZxing(candidates: Iterable<HTMLCanvasElement>): Promise
 }
 
 function isLikelyIsbn(value: string): boolean {
-  return value.length === 13 && (value.startsWith('978') || value.startsWith('979'))
+  return value.length === 13 && (value.startsWith('978') || value.startsWith('979')) && isValidIsbn13(value)
 }
 
 function* barcodeCandidates(image: HTMLImageElement): Generator<HTMLCanvasElement> {

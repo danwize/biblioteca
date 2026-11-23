@@ -10,7 +10,8 @@ export type OcrSuggestion = {
 
 export async function recognizeBookText(image: Blob): Promise<OcrSuggestion> {
   const tesseract = await import('tesseract.js')
-  const result = await tesseract.recognize(image, 'eng')
+  const prepared = await prepareOcrImage(image)
+  const result = await tesseract.recognize(prepared, 'eng')
   const rawText = result.data.text.trim()
   const lines = rawText.split('\n').map(cleanLine).filter(Boolean)
   const byLine = lines.find((line) => /^by\s+/i.test(line))
@@ -51,4 +52,19 @@ function findTitleCandidate(lines: string[]): string | null {
     const words = line.split(/\s+/).filter(Boolean).length
     return words >= 2 && letters >= 8 && letters / Math.max(line.length, 1) > 0.6
   }) ?? null
+}
+
+async function prepareOcrImage(image: Blob): Promise<Blob> {
+  if (typeof createImageBitmap !== 'function') return image
+  const bitmap = await createImageBitmap(image)
+  const maxDimension = 1600
+  const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale))
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale))
+  const context = canvas.getContext('2d')
+  if (!context) return image
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+  bitmap.close()
+  return await new Promise<Blob>((resolve) => canvas.toBlob((blob) => resolve(blob ?? image), 'image/jpeg', 0.88))
 }
