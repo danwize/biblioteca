@@ -83,9 +83,9 @@ npm run dev --prefix apps/web
 
 - Works and physical copies are separate tables.
 - Book metadata lookup uses Open Library by ISBN.
-- On desktop, an in-browser camera preview captures images; on mobile and tablet (coarse-pointer), the native OS image picker is used instead.
-- Barcode detection runs first on back cover and spine captures using the native `BarcodeDetector` API with a ZXing fallback; a matched ISBN triggers metadata lookup without OCR.
-- Client-side OCR (Tesseract.js) runs as a fallback when barcode detection misses or is unavailable, and exclusively on front cover captures.
+- Camera capture runs in the browser as a guided session: front cover, then back cover, with optional spine and additional photos, finished with **Done**. **Use a photo** adds a photo from a file or, on phones, the native camera instead of the live preview.
+- Each captured photo is checked for an ISBN barcode (native `BarcodeDetector`, falling back to ZXing); a valid ISBN triggers an immediate lookup.
+- On **Done**, client-side OCR (Tesseract.js) reads all captured photos to suggest title, authors, series, and ISBN values the barcode lookup did not fill.
 - Users review and correct fields before import.
 - Physical duplicate copies are modeled with `copy_number`.
 
