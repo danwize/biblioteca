@@ -12,18 +12,35 @@ export async function recognizeBookText(image: Blob): Promise<OcrSuggestion> {
   const tesseract = await import('tesseract.js')
   const prepared = await prepareOcrImage(image)
   const result = await tesseract.recognize(prepared, 'eng')
-  const rawText = result.data.text.trim()
-  const lines = rawText.split('\n').map((line) => line.trim()).filter(Boolean)
+  return parseOcrSuggestion(result.data.text)
+}
+
+export function parseOcrSuggestion(rawText: string): OcrSuggestion {
+  const trimmedText = rawText.trim()
+  const lines = trimmedText.split('\n').map(cleanLine).filter(Boolean)
   const byLine = lines.find((line) => /^by\s+/i.test(line))
   const seriesLine = lines.find((line) => /^series\s*:/i.test(line))
 
   return {
-    rawText,
-    isbn: extractIsbn(rawText),
-    title: lines[0] ?? null,
+    rawText: trimmedText,
+    isbn: extractIsbn(trimmedText),
+    title: findTitleCandidate(lines),
     authors: byLine ? [byLine.replace(/^by\s+/i, '').trim()] : [],
-    series: seriesLine ? seriesLine.replace(/^series\s*:/i, '').trim() : null
+    series: seriesLine ? seriesLine.replace(/^series\s*:/i, '').trim() || null : null
   }
+}
+
+function cleanLine(line: string): string {
+  return line.replace(/[|~_`^]+/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function findTitleCandidate(lines: string[]): string | null {
+  return lines.find((line) => {
+    if (/^(isbn|by|author|publisher|series)\b/i.test(line)) return false
+    const letters = [...line].filter((character) => /[a-z]/i.test(character)).length
+    const words = line.split(/\s+/).filter(Boolean).length
+    return words >= 2 && letters >= 8 && letters / Math.max(line.length, 1) > 0.6
+  }) ?? null
 }
 
 async function prepareOcrImage(image: Blob): Promise<Blob> {

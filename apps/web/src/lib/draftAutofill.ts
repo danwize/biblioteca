@@ -97,6 +97,7 @@ export function applyOcrToDraft(
   const values: Partial<Record<keyof Draft, string | null | undefined>> = {
     title: suggestion.title,
     authors: suggestion.authors.join(', '),
+    series: suggestion.series,
     isbn13: suggestion.isbn?.length === 13 ? suggestion.isbn : '',
     isbn10: suggestion.isbn?.length === 10 ? suggestion.isbn : '',
     ocrText: suggestion.rawText
@@ -107,6 +108,7 @@ export function applyOcrToDraft(
       ...draft,
       title: ocrValue('title', values.title, draft.title, sources),
       authors: ocrValue('authors', values.authors, draft.authors, sources),
+      series: ocrValue('series', values.series, draft.series, sources),
       isbn13: ocrValue('isbn13', values.isbn13, draft.isbn13, sources),
       isbn10: ocrValue('isbn10', values.isbn10, draft.isbn10, sources),
       ocrText: draft.ocrText ? `${draft.ocrText}\n\n${suggestion.rawText}` : suggestion.rawText

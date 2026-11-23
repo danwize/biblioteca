@@ -149,8 +149,9 @@ function App() {
     const capture = { dataUrl, kind }
     setCaptures((current) => [...current, capture])
     setMessage('Photo captured. Checking for an ISBN barcode...')
+    let detected: string | null = null
     try {
-      const detected = await detectIsbn(dataUrl)
+      detected = await detectIsbn(dataUrl)
       if (detected) {
         setMessage(`ISBN ${detected} found. Looking up book metadata...`)
         await lookupByIsbn(detected)
@@ -158,7 +159,7 @@ function App() {
     } catch {
       // A photo without a barcode is expected; OCR runs when the session is done.
     }
-    setMessage(`${labelForCapture(kind)} saved. Capture the next side or choose Done.`)
+    if (!detected) setMessage(`${labelForCapture(kind)} saved. Capture the next side or choose Done.`)
     if (kind === 'front') setCaptureKind('back')
     else if (kind === 'back') setCaptureKind('additional')
   }
