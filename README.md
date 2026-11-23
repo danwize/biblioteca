@@ -30,7 +30,7 @@ docker compose up --build
 
 ## Local HTTPS For Camera Testing
 
-Browsers allow camera access only from HTTPS origins, or from `localhost` on the same computer. Phone testing over a LAN IP needs HTTPS with a certificate the phone trusts.
+The in-browser live camera preview requires HTTPS, or `localhost` on the same computer. **Use a photo** opens the native file picker (or, on phones, the native camera) and does not need the camera API, but testing the live preview from a phone or another device over a LAN IP needs HTTPS with a certificate the device trusts.
 
 Generate a local certificate:
 
@@ -54,7 +54,7 @@ https://biblioteca.local:8443
 Notes:
 
 - `mkcert` is recommended because it creates locally trusted certificates.
-- For phone testing, the phone must trust the same mkcert root CA or the browser may still block camera access.
+- For testing from a phone or another device over LAN, the device must trust the same mkcert root CA or the browser will block the in-app camera preview.
 - The HTTPS proxy is optional. Without it, use `docker compose up --build` and browse `http://localhost:8081` from the same computer.
 - In production on TrueNAS behind pfSense HAProxy, do not run the `https` profile. Let pfSense terminate TLS and forward HTTP to the `web` service.
 
@@ -83,8 +83,9 @@ npm run dev --prefix apps/web
 
 - Works and physical copies are separate tables.
 - Book metadata lookup uses Open Library by ISBN.
-- Camera capture runs in the browser.
-- Client-side OCR uses Tesseract.js as a no-server-resource fallback.
+- Camera capture runs in the browser as a guided session: front cover, then back cover, with optional spine and additional photos, finished with **Done**. **Use a photo** adds a photo from a file or, on phones, the native camera instead of the live preview.
+- Each captured photo is checked for an ISBN barcode (native `BarcodeDetector`, falling back to ZXing); a valid ISBN triggers an immediate lookup.
+- On **Done**, client-side OCR (Tesseract.js) reads all captured photos to suggest title, authors, series, and ISBN values the barcode lookup did not fill.
 - Users review and correct fields before import.
 - Physical duplicate copies are modeled with `copy_number`.
 
