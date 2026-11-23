@@ -2,23 +2,27 @@ export function normalizeIsbn(value: string): string {
   return value.replace(/[^0-9X]/gi, '').toUpperCase()
 }
 
+function isValidIsbn13(candidate: string): boolean {
+  const sum = candidate.split('').reduce((total, digit, index) => total + Number(digit) * (index % 2 === 0 ? 1 : 3), 0)
+  return sum % 10 === 0
+}
+
+function isValidIsbn10(candidate: string): boolean {
+  const sum = candidate.split('').reduce((total, char, index) => {
+    const value = char === 'X' ? 10 : Number(char)
+    return total + value * (10 - index)
+  }, 0)
+  return sum % 11 === 0
+}
+
 export function extractIsbn(text: string): string | null {
-  const candidates = text.toUpperCase().match(/(?:97[89][0-9X]{11}|[0-9][0-9X-]{8,}[0-9X])/g) ?? []
-  for (const candidate of candidates) {
-    const normalized = normalizeIsbn(candidate)
-    if (normalized.length === 13 && isValidIsbn13(normalized)) return normalized
-    if (normalized.length === 10 && isValidIsbn10(normalized)) return normalized
-  }
-  return null
-}
+  const compact = text.replace(/[-\s]/g, '')
 
-export function isValidIsbn13(value: string): boolean {
-  if (!/^97[89][0-9]{10}$/.test(value)) return false
-  const checksum = value.slice(0, 12).split('').reduce((sum, digit, index) => sum + Number(digit) * (index % 2 ? 3 : 1), 0)
-  return (10 - (checksum % 10)) % 10 === Number(value[12])
-}
+  const isbn13 = (compact.match(/97[89][0-9]{10}/g) ?? []).find(isValidIsbn13)
+  if (isbn13) return isbn13
 
-export function isValidIsbn10(value: string): boolean {
-  if (!/^[0-9]{9}[0-9X]$/.test(value)) return false
-  return value.split('').reduce((sum, digit, index) => sum + (digit === 'X' ? 10 : Number(digit)) * (10 - index), 0) % 11 === 0
+  const isbn10 = (compact.match(/[0-9]{9}[0-9Xx]/g) ?? [])
+    .map((candidate) => candidate.toUpperCase())
+    .find(isValidIsbn10)
+  return isbn10 ?? null
 }

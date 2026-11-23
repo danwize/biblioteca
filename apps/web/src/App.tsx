@@ -2,9 +2,9 @@ import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import './App.css'
 import { CONFIRM_IMPORT, LIST_COPIES, LOOKUP_BOOK, START_IMPORT } from './graphql/operations'
 import { graphqlRequest } from './lib/graphql'
-import { normalizeIsbn } from './lib/isbn'
-import { detectIsbn } from './lib/barcode'
+import { extractIsbn, normalizeIsbn } from './lib/isbn'
 import { recognizeBookText, type OcrSuggestion } from './lib/ocr'
+import { detectIsbn } from './lib/barcode'
 
 type PhysicalCopy = {
   id: string
@@ -317,8 +317,10 @@ function App() {
 
       <section className="scan-grid">
         <div className="camera-card">
-          <video ref={videoRef} aria-label="Book scanner camera preview" playsInline muted />
-          {!cameraActive && <div className="camera-placeholder">Camera preview</div>}
+          <div className="camera-viewport">
+            <video ref={videoRef} aria-label="Book scanner camera preview" playsInline muted />
+            {!cameraActive && <div className="camera-placeholder">Camera preview</div>}
+          </div>
           <div className="capture-guide" aria-live="polite">
             <strong>Next: {labelForCapture(captureKind)}</strong>
             <span>{captureKind === 'front' ? 'Start with the front cover.' : captureKind === 'back' ? 'Now capture the back cover for ISBNs.' : 'Optional for books with useful extra detail.'}</span>
