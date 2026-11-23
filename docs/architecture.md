@@ -14,8 +14,8 @@ EF Core is code-first. Mapping is configured through fluent API classes under `s
 
 ## Scan Pipeline
 
-V1 uses a barcode-first scan pipeline. When the user captures a back cover or spine image, `BarcodeDetector` (the native browser API) runs first using EAN-13 and UPC-A formats; ZXing serves as a WASM fallback for browsers without native support. A detected ISBN triggers an Open Library lookup and fills the draft form without running OCR. Front cover captures skip barcode detection and go straight to OCR.
+V1 uses a guided capture session: front cover, then back cover, with optional spine and additional photos, finished with **Done**. After every captured photo, `BarcodeDetector` (the native browser API) runs first using EAN-13 and UPC-A formats, with ZXing as a fallback for browsers without native support; a checksum-valid ISBN triggers an immediate Open Library lookup that fills the draft form.
 
-When barcode detection misses or is unavailable, Tesseract.js runs in the browser for OCR. Keeping both barcode detection and OCR client-side avoids dedicated server CPU/GPU resources.
+On **Done**, Tesseract.js runs in the browser across all captured photos to suggest the title, authors, series, and ISBN values that barcode lookup did not provide. The user reviews and corrects the draft before importing. Keeping both barcode detection and OCR client-side avoids dedicated server CPU/GPU resources.
 
 AI is intentionally not part of v1. If needed later, add it behind a metadata extraction provider interface so imports can combine barcode, OCR, API lookup, and manual correction.

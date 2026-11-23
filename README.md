@@ -30,7 +30,7 @@ docker compose up --build
 
 ## Local HTTPS For Camera Testing
 
-The desktop in-browser camera preview requires HTTPS. On mobile and tablet (coarse-pointer) devices, the app uses the native OS image picker instead of the camera API, so HTTPS is not required for the mobile scan flow. Desktop testing over a LAN IP still needs HTTPS with a certificate the device trusts.
+The in-browser live camera preview requires HTTPS, or `localhost` on the same computer. **Use a photo** opens the native file picker (or, on phones, the native camera) and does not need the camera API, but testing the live preview from a phone or another device over a LAN IP needs HTTPS with a certificate the device trusts.
 
 Generate a local certificate:
 
@@ -54,7 +54,7 @@ https://biblioteca.local:8443
 Notes:
 
 - `mkcert` is recommended because it creates locally trusted certificates.
-- For desktop testing from another device over LAN, the device must trust the same mkcert root CA or the browser will block the in-app camera preview.
+- For testing from a phone or another device over LAN, the device must trust the same mkcert root CA or the browser will block the in-app camera preview.
 - The HTTPS proxy is optional. Without it, use `docker compose up --build` and browse `http://localhost:8081` from the same computer.
 - In production on TrueNAS behind pfSense HAProxy, do not run the `https` profile. Let pfSense terminate TLS and forward HTTP to the `web` service.
 

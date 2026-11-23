@@ -10,7 +10,8 @@ describe('draft autofill', () => {
       rawText: 'OCR Title',
       isbn: '9780486214375',
       title: 'OCR Title',
-      authors: ['OCR Author']
+      authors: ['OCR Author'],
+      series: null
     })
 
     expect(next.draft.title).toBe('Manual Title')
@@ -50,7 +51,8 @@ describe('draft autofill', () => {
       rawText: 'OCR Title',
       isbn: null,
       title: 'OCR Title',
-      authors: []
+      authors: [],
+      series: null
     })
 
     expect(next.draft.title).toBe('Lookup Title')

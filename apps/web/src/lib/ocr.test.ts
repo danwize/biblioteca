@@ -7,7 +7,8 @@ describe('parseOcrSuggestion', () => {
       rawText: '|||\nISBN 978-0-486-21437-5\nThe Real Book Title\nby Jane Reader',
       isbn: '9780486214375',
       title: 'The Real Book Title',
-      authors: ['Jane Reader']
+      authors: ['Jane Reader'],
+      series: null
     })
   })
 })
