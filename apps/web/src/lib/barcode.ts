@@ -11,11 +11,11 @@ declare global {
 
 export async function detectIsbn(dataUrl: string): Promise<string | null> {
   const image = await imageFromDataUrl(dataUrl)
-  const candidates = barcodeCandidates(image)
+  const nativeCandidates = barcodeCandidates(image)
   if (window.BarcodeDetector) {
     try {
       const detector = new window.BarcodeDetector({ formats: ['ean_13', 'upc_a'] })
-      for (const candidate of candidates) {
+      for (const candidate of nativeCandidates) {
         const results = await detector.detect(candidate) as NativeBarcode[]
         const isbn = results.map((result) => extractIsbn(result.rawValue ?? '')).find(Boolean)
         if (isbn) return isbn
@@ -34,7 +34,7 @@ export async function detectIsbn(dataUrl: string): Promise<string | null> {
     hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.EAN_13, BarcodeFormat.UPC_A])
     hints.set(DecodeHintType.TRY_HARDER, true)
     const reader = new BrowserMultiFormatReader(hints)
-    for (const candidate of candidates) {
+    for (const candidate of barcodeCandidates(image)) {
       try {
         const isbn = extractIsbn(reader.decodeFromCanvas(candidate).getText())
         if (isbn) return isbn

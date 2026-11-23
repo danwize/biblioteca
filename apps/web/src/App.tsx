@@ -5,6 +5,7 @@ import { graphqlRequest } from './lib/graphql'
 import { normalizeIsbn } from './lib/isbn'
 import { recognizeBookText, type OcrSuggestion } from './lib/ocr'
 import { detectIsbn } from './lib/barcode'
+import { hasRequiredCaptures, MISSING_REQUIRED_CAPTURES_MESSAGE, nextRequiredCaptureKind, toStoredImageKind, type CaptureKind } from './lib/captureKinds'
 import {
   applyLookupToDraft,
   applyOcrToDraft,
@@ -26,7 +27,7 @@ type PhysicalCopy = {
   copyNumber: number
 }
 
-type Capture = { kind: 'front' | 'back' | 'spine' | 'additional'; dataUrl: string }
+type Capture = { id: string; kind: CaptureKind; dataUrl: string }
 
 function App() {
   const [copies, setCopies] = useState<PhysicalCopy[]>([])
@@ -41,10 +42,13 @@ function App() {
   const [captures, setCaptures] = useState<Capture[]>([])
   const [captureKind, setCaptureKind] = useState<Capture['kind']>('front')
   const [isProcessingCaptures, setIsProcessingCaptures] = useState(false)
+  const [isDetecting, setIsDetecting] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const lookupSequenceRef = useRef(0)
   const pendingLookupCountRef = useRef(0)
+  const detectionSequenceRef = useRef(0)
+  const ocrCacheRef = useRef(new Map<string, OcrSuggestion>())
 
   useEffect(() => {
     void loadCopies()
@@ -146,14 +150,17 @@ function App() {
   }
 
   async function addCapture(dataUrl: string, kind: Capture['kind']) {
-    const capture = { dataUrl, kind }
+    const capture = { id: `${Date.now()}-${Math.random()}`, dataUrl, kind }
     setCaptures((current) => [...current, capture])
-    const nextKind = nextCaptureKind(kind, captures)
+    const nextKind = nextRequiredCaptureKind([...captures, capture], kind)
     setCaptureKind(nextKind)
     setMessage('Photo captured. Checking for an ISBN barcode...')
+    const detectionSequence = ++detectionSequenceRef.current
+    setIsDetecting(true)
     let detectedIsbn: string | null = null
     try {
       detectedIsbn = await detectIsbn(dataUrl)
+      if (detectionSequence !== detectionSequenceRef.current) return
       if (detectedIsbn) {
         setIsbn(detectedIsbn)
         setMessage(`ISBN ${detectedIsbn} found. Looking up book metadata...`)
@@ -161,19 +168,10 @@ function App() {
       }
     } catch {
       // A photo without a barcode is expected; OCR runs when the session is done.
+    } finally {
+      setIsDetecting(false)
     }
     if (!detectedIsbn) setMessage(`${labelForCapture(kind)} saved. Capture the next side or choose Done.`)
-  }
-
-  function nextCaptureKind(kind: Capture['kind'], currentCaptures: Capture[]) {
-    return requiredCaptureKind([...currentCaptures, { kind, dataUrl: '' }])
-  }
-
-  function requiredCaptureKind(currentCaptures: Capture[]) {
-    const kinds = new Set(currentCaptures.map((capture) => capture.kind))
-    if (!kinds.has('front')) return 'front'
-    if (!kinds.has('back')) return 'back'
-    return 'additional'
   }
 
   async function addUploadedCapture(event: ChangeEvent<HTMLInputElement>) {
@@ -199,14 +197,23 @@ function App() {
     try {
       const suggestions: OcrSuggestion[] = []
       let failedCount = 0
-      for (const { dataUrl } of captures) {
+      const orderedCaptures = [...captures].sort((a, b) => (a.kind === 'front' ? -1 : b.kind === 'front' ? 1 : 0))
+      for (const capture of orderedCaptures) {
+        const cached = ocrCacheRef.current.get(capture.id)
+        if (cached) {
+          suggestions.push(cached)
+          continue
+        }
         try {
-          const response = await fetch(dataUrl)
-          suggestions.push(await recognizeBookText(await response.blob()))
+          const response = await fetch(capture.dataUrl)
+          const suggestion = await recognizeBookText(await response.blob())
+          ocrCacheRef.current.set(capture.id, suggestion)
+          suggestions.push(suggestion)
         } catch {
           failedCount += 1
         }
       }
+      updateDraftState({ ...draftRef.current, ocrText: '' })
       suggestions.forEach((suggestion) => applyOcrSuggestion(suggestion))
       if (!suggestions.length) {
         setMessage('Capture complete. OCR was unavailable, so review or enter the metadata manually.')
@@ -228,14 +235,14 @@ function App() {
     const next = applyOcrToDraft(draftRef.current, fieldSourcesRef.current, suggestion)
     updateDraftState(next.draft)
     updateFieldSources(next.sources)
-    if (suggestion.isbn) {
+    if (suggestion.isbn && !isbn && fieldSourcesRef.current.isbn13 !== 'lookup' && fieldSourcesRef.current.isbn13 !== 'manual') {
       setIsbn(suggestion.isbn)
     }
   }
 
   async function saveImport() {
-    if (!captures.some((capture) => capture.kind === 'front') || !captures.some((capture) => capture.kind === 'back')) {
-      setMessage('Capture at least a front cover and back cover before importing.')
+    if (!hasRequiredCaptures(captures)) {
+      setMessage(MISSING_REQUIRED_CAPTURES_MESSAGE)
       return
     }
     lookupSequenceRef.current += 1
@@ -268,12 +275,13 @@ function App() {
       setCaptures([])
       setCaptureKind('front')
       setIsbn('')
+      ocrCacheRef.current.clear()
       setMessage('Book imported.')
       let uploadFailed = false
       for (const capture of capturesToUpload) {
         const formData = new FormData()
         formData.append('physicalCopyId', result.confirmBookImport.id)
-        formData.append('kind', capture.kind === 'front' ? 'front_cover' : capture.kind === 'back' ? 'back_cover' : capture.kind)
+        formData.append('kind', toStoredImageKind(capture.kind))
         formData.append('file', dataUrlToBlob(capture.dataUrl), `${capture.kind}.jpg`)
         try {
           const response = await fetch('/images', { method: 'POST', body: formData })
@@ -345,22 +353,22 @@ function App() {
             <span>{captureKind === 'front' ? 'Start with the front cover.' : captureKind === 'back' ? 'Now capture the back cover for ISBNs.' : 'Optional for books with useful extra detail.'}</span>
           </div>
           <div className="camera-actions">
-            <button type="button" disabled={!cameraActive || isProcessingCaptures || isBusy} onClick={() => void captureImage()}>Capture {labelForCapture(captureKind).toLowerCase()}</button>
-            <label className="upload-button">Use a photo<input type="file" accept="image/*" disabled={isProcessingCaptures || isBusy} onChange={(event) => void addUploadedCapture(event)} /></label>
+            <button type="button" disabled={!cameraActive || isProcessingCaptures || isBusy || isDetecting} onClick={() => void captureImage()}>Capture {labelForCapture(captureKind).toLowerCase()}</button>
+            <label className="upload-button">Use a photo<input type="file" accept="image/*" disabled={isProcessingCaptures || isBusy || isDetecting} onChange={(event) => void addUploadedCapture(event)} /></label>
           </div>
           <div className="optional-captures" aria-label="Optional capture types">
-            {(['spine', 'additional'] as const).map((kind) => <button key={kind} type="button" className="secondary" disabled={isProcessingCaptures || isBusy} onClick={() => setCaptureKind(kind)}>Add {labelForCapture(kind).toLowerCase()}</button>)}
+            {(['spine', 'additional'] as const).map((kind) => <button key={kind} type="button" className="secondary" disabled={isProcessingCaptures || isBusy || isDetecting} onClick={() => setCaptureKind(kind)}>Add {labelForCapture(kind).toLowerCase()}</button>)}
           </div>
-          {captures.length > 0 && <div className="capture-strip" aria-label="Captured photos">{captures.map((capture, index) => <figure key={`${capture.kind}-${index}`}><img src={capture.dataUrl} alt={`${labelForCapture(capture.kind)} captured`} /><figcaption>{labelForCapture(capture.kind)}</figcaption><select aria-label={`Relabel photo ${index + 1}`} value={capture.kind} disabled={isProcessingCaptures || isBusy} onChange={(event) => setCaptures((current) => { const next = current.map((item, itemIndex) => itemIndex === index ? { ...item, kind: event.target.value as Capture['kind'] } : item); setCaptureKind(requiredCaptureKind(next)); return next })}><option value="front">Front cover</option><option value="back">Back cover</option><option value="spine">Spine</option><option value="additional">Additional photo</option></select><button type="button" className="secondary" disabled={isProcessingCaptures || isBusy} onClick={() => setCaptures((current) => { const next = current.filter((_, itemIndex) => itemIndex !== index); setCaptureKind(requiredCaptureKind(next)); return next })}>Remove</button></figure>)}</div>}
-          <button type="button" className="done-button" disabled={!captures.length || isProcessingCaptures || isBusy} onClick={() => void finishCapture()}>Done</button>
+          {captures.length > 0 && <div className="capture-strip" aria-label="Captured photos">{captures.map((capture, index) => <figure key={capture.id}><img src={capture.dataUrl} alt={`${labelForCapture(capture.kind)} captured`} /><figcaption>{labelForCapture(capture.kind)}</figcaption><select aria-label={`Relabel photo ${index + 1}`} value={capture.kind} disabled={isProcessingCaptures || isBusy || isDetecting} onChange={(event) => setCaptures((current) => current.map((item) => item.id === capture.id ? { ...item, kind: event.target.value as Capture['kind'] } : item))}><option value="front">Front cover</option><option value="back">Back cover</option><option value="spine">Spine</option><option value="additional">Additional photo</option></select><button type="button" className="secondary" disabled={isProcessingCaptures || isBusy || isDetecting} onClick={() => { detectionSequenceRef.current += 1; setCaptures((current) => current.filter((item) => item.id !== capture.id)) }}>Remove</button></figure>)}</div>}
+          <button type="button" className="done-button" disabled={!captures.length || isProcessingCaptures || isBusy || isDetecting} onClick={() => void finishCapture()}>Done</button>
         </div>
 
         <form className="import-form" onSubmit={(event) => { event.preventDefault(); void saveImport() }}>
           <label>
             ISBN lookup
             <span className="inline-field">
-              <input value={isbn} onChange={(event) => setIsbn(event.target.value)} placeholder="9780486214375" disabled={isProcessingCaptures || isBusy} />
-              <button type="button" disabled={isBusy || isProcessingCaptures} onClick={() => void lookupByIsbn()}>Lookup</button>
+              <input value={isbn} onChange={(event) => setIsbn(event.target.value)} placeholder="9780486214375" disabled={isProcessingCaptures || isBusy || isDetecting} />
+              <button type="button" disabled={isBusy || isProcessingCaptures || isDetecting} onClick={() => void lookupByIsbn()}>Lookup</button>
             </span>
           </label>
 

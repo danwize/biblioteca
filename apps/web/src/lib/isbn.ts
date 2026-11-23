@@ -16,11 +16,11 @@ export function isValidIsbn10(candidate: string): boolean {
 }
 
 export function extractIsbn(text: string): string | null {
-  for (const line of text.split(/\r?\n/)) {
-    const compact = line.replace(/\bISBN(?:[-\s]?(?:10|13))?\b/ig, ' ').replace(/[-\s]/g, '')
+  const groups = text.split(/\s+/).filter((token) => !/^ISBN(?:-?(?:10|13))?$/i.test(token))
+  for (const group of groups) {
+    const compact = group.replace(/[^0-9Xx]/g, '')
     const isbn13 = (compact.match(/97[89][0-9]{10}/g) ?? []).find(isValidIsbn13)
     if (isbn13) return isbn13
-
     const isbn10 = (compact.match(/(?<![0-9Xx])[0-9]{9}[0-9Xx](?![0-9Xx])/g) ?? [])
       .map((candidate) => candidate.toUpperCase())
       .find(isValidIsbn10)

@@ -18,3 +18,11 @@ export function toStoredImageKind(kind: CaptureKind): StoredImageKind {
 export function hasRequiredCaptures(captures: ReadonlyArray<{ kind: CaptureKind }>): boolean {
   return captures.some((capture) => capture.kind === 'front') && captures.some((capture) => capture.kind === 'back')
 }
+
+export function nextRequiredCaptureKind(captures: ReadonlyArray<{ kind: CaptureKind }>, justCaptured?: CaptureKind): CaptureKind {
+  const kinds = new Set(captures.map((capture) => capture.kind))
+  if (justCaptured) kinds.add(justCaptured)
+  if (!kinds.has('front')) return 'front'
+  if (!kinds.has('back')) return 'back'
+  return 'additional'
+}
