@@ -3,8 +3,8 @@ import './App.css'
 import { CONFIRM_IMPORT, LIST_COPIES, LOOKUP_BOOK, START_IMPORT } from './graphql/operations'
 import { graphqlRequest } from './lib/graphql'
 import { normalizeIsbn } from './lib/isbn'
-import { detectIsbn } from './lib/barcode'
 import { recognizeBookText, type OcrSuggestion } from './lib/ocr'
+import { detectIsbn } from './lib/barcode'
 
 type PhysicalCopy = {
   id: string

@@ -21,7 +21,7 @@ export function extractIsbn(text: string): string | null {
   const isbn13 = (compact.match(/97[89][0-9]{10}/g) ?? []).find(isValidIsbn13)
   if (isbn13) return isbn13
 
-  const isbn10 = (compact.match(/[0-9]{9}[0-9Xx]/g) ?? [])
+  const isbn10 = (compact.match(/(?<![0-9X])[0-9]{9}[0-9Xx](?![0-9X])/g) ?? [])
     .map((candidate) => candidate.toUpperCase())
     .find(isValidIsbn10)
   return isbn10 ?? null
