@@ -3,8 +3,8 @@ import './App.css'
 import { CONFIRM_IMPORT, LIST_COPIES, LOOKUP_BOOK, START_IMPORT } from './graphql/operations'
 import { graphqlRequest } from './lib/graphql'
 import { normalizeIsbn } from './lib/isbn'
+import { detectIsbn } from './lib/barcode'
 import { recognizeBookText, type OcrSuggestion } from './lib/ocr'
-import { BrowserMultiFormatReader } from '@zxing/browser'
 
 type PhysicalCopy = {
   id: string
@@ -176,10 +176,8 @@ function App() {
     setCaptures((current) => [...current, capture])
     setMessage('Photo captured. Checking for an ISBN barcode...')
     try {
-      const reader = new BrowserMultiFormatReader()
-      const result = await reader.decodeFromImageUrl(dataUrl)
-      const detected = normalizeIsbn(result.getText())
-      if (detected.length === 10 || detected.length === 13) {
+      const detected = await detectIsbn(dataUrl)
+      if (detected) {
         setMessage(`ISBN ${detected} found. Looking up book metadata...`)
         await lookupByIsbn(detected)
         return
@@ -212,10 +210,11 @@ function App() {
     setIsProcessingCaptures(true)
     setMessage('Reading all captured photos for title, authors, series, and ISBN...')
     try {
-      const suggestions = await Promise.all(captures.map(async ({ dataUrl }) => {
+      const suggestions: OcrSuggestion[] = []
+      for (const { dataUrl } of captures) {
         const response = await fetch(dataUrl)
-        return recognizeBookText(await response.blob())
-      }))
+        suggestions.push(await recognizeBookText(await response.blob()))
+      }
       suggestions.forEach((suggestion) => applyOcrSuggestion(suggestion))
       setDraft((current) => ({ ...current, ocrText: suggestions.map((suggestion) => suggestion.rawText).filter(Boolean).join('\n\n') }))
       setMessage('Capture complete. Review and correct the suggested metadata before importing.')
