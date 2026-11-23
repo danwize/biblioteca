@@ -72,7 +72,7 @@ test('guided capture: barcode lookup, prompt advances, OCR fills gaps on Done', 
   await expect(page.getByLabel('Title')).toHaveValue('Looked-up Title')
   await expect(page.getByLabel('ISBN-13')).toHaveValue('9780486214375')
   await expect(page.getByLabel('Authors')).toHaveValue(/David\s+Thomas/i)
-  await expect(page.getByLabel('Series', { exact: true })).toHaveValue(/Pragmatic\s+Bookshelf/i)
+  await expect(page.getByLabel(/^Series( \(\w+\))?$/)).toHaveValue(/Pragmatic\s+Bookshelf/i)
   await expect(page.getByRole('button', { name: 'Import book' })).toBeEnabled()
   if (EVIDENCE_DIR) await page.screenshot({ path: `${EVIDENCE_DIR}/04-review-after-done-ocr.png`, fullPage: true })
 })
