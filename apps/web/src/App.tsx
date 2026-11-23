@@ -33,7 +33,7 @@ function App() {
   const [copies, setCopies] = useState<PhysicalCopy[]>([])
   const [draft, setDraft] = useState<Draft>(emptyDraft)
   const draftRef = useRef<Draft>(emptyDraft)
-  const [, setFieldSources] = useState<DraftFieldSources>(emptyFieldSources)
+  const [fieldSources, setFieldSources] = useState<DraftFieldSources>(emptyFieldSources)
   const fieldSourcesRef = useRef<DraftFieldSources>(emptyFieldSources)
   const [isbn, setIsbn] = useState('')
   const [message, setMessage] = useState('')
@@ -91,6 +91,11 @@ function App() {
   function updateDraftState(next: Draft) {
     draftRef.current = next
     setDraft(next)
+  }
+
+  function fieldLabel(label: string, field: keyof Draft) {
+    const source = fieldSources[field]
+    return source === 'empty' ? label : `${label} (${source})`
   }
 
   function updateFieldSources(next: DraftFieldSources) {
@@ -372,23 +377,23 @@ function App() {
             </span>
           </label>
 
-          <label>Title<input required value={draft.title} onChange={(event) => updateDraft('title', event.target.value)} /></label>
-          <label>Authors<input value={draft.authors} onChange={(event) => updateDraft('authors', event.target.value)} placeholder="Comma-separated" /></label>
-          <label>Series<input value={draft.series} onChange={(event) => updateDraft('series', event.target.value)} /></label>
-          <label>Series number<input value={draft.seriesNumber} onChange={(event) => updateDraft('seriesNumber', event.target.value)} /></label>
+          <label>{fieldLabel('Title', 'title')}<input required value={draft.title} onChange={(event) => updateDraft('title', event.target.value)} /></label>
+          <label>{fieldLabel('Authors', 'authors')}<input value={draft.authors} onChange={(event) => updateDraft('authors', event.target.value)} placeholder="Comma-separated" /></label>
+          <label>{fieldLabel('Series', 'series')}<input value={draft.series} onChange={(event) => updateDraft('series', event.target.value)} /></label>
+          <label>{fieldLabel('Series number', 'seriesNumber')}<input value={draft.seriesNumber} onChange={(event) => updateDraft('seriesNumber', event.target.value)} /></label>
           <div className="two-columns">
-            <label>ISBN-13<input value={draft.isbn13} onChange={(event) => updateDraft('isbn13', event.target.value)} /></label>
-            <label>ISBN-10<input value={draft.isbn10} onChange={(event) => updateDraft('isbn10', event.target.value)} /></label>
+            <label>{fieldLabel('ISBN-13', 'isbn13')}<input value={draft.isbn13} onChange={(event) => updateDraft('isbn13', event.target.value)} /></label>
+            <label>{fieldLabel('ISBN-10', 'isbn10')}<input value={draft.isbn10} onChange={(event) => updateDraft('isbn10', event.target.value)} /></label>
           </div>
           <div className="two-columns">
-            <label>Publisher<input value={draft.publisher} onChange={(event) => updateDraft('publisher', event.target.value)} /></label>
-            <label>Published<input value={draft.publishedDate} onChange={(event) => updateDraft('publishedDate', event.target.value)} /></label>
+            <label>{fieldLabel('Publisher', 'publisher')}<input value={draft.publisher} onChange={(event) => updateDraft('publisher', event.target.value)} /></label>
+            <label>{fieldLabel('Published', 'publishedDate')}<input value={draft.publishedDate} onChange={(event) => updateDraft('publishedDate', event.target.value)} /></label>
           </div>
           <div className="two-columns">
-            <label>Pages<input value={draft.pageCount} onChange={(event) => updateDraft('pageCount', event.target.value)} inputMode="numeric" /></label>
-            <label>Format<input value={draft.format} onChange={(event) => updateDraft('format', event.target.value)} placeholder="paperback, hardback" /></label>
+            <label>{fieldLabel('Pages', 'pageCount')}<input value={draft.pageCount} onChange={(event) => updateDraft('pageCount', event.target.value)} inputMode="numeric" /></label>
+            <label>{fieldLabel('Format', 'format')}<input value={draft.format} onChange={(event) => updateDraft('format', event.target.value)} placeholder="paperback, hardback" /></label>
           </div>
-          <label>Notes<textarea value={draft.notes} onChange={(event) => updateDraft('notes', event.target.value)} /></label>
+          <label>{fieldLabel('Notes', 'notes')}<textarea value={draft.notes} onChange={(event) => updateDraft('notes', event.target.value)} /></label>
           <button type="submit" disabled={isBusy || isProcessingCaptures || !draft.title}>Import book</button>
         </form>
       </section>
