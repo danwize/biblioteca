@@ -175,6 +175,7 @@ function App() {
     const capture = { dataUrl, kind }
     setCaptures((current) => [...current, capture])
     setMessage('Photo captured. Checking for an ISBN barcode...')
+    if (kind === 'front') setCaptureKind('back')
     try {
       const detected = await detectIsbn(dataUrl)
       if (detected) {
@@ -186,7 +187,6 @@ function App() {
       // A photo without a barcode is expected; OCR runs when the session is done.
     }
     setMessage(`${labelForCapture(kind)} saved. Capture the next side or choose Done.`)
-    if (kind === 'front') setCaptureKind('back')
   }
 
   async function addUploadedCapture(event: ChangeEvent<HTMLInputElement>) {
