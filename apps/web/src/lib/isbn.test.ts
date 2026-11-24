@@ -39,6 +39,11 @@ describe('separated ISBN digit groups', () => {
     expect(extractIsbn('ISBN 0-8044-2957-X')).toBe('080442957X')
   })
 
+  it('does not mistake the leading digits of an unseparated ISBN-10 for a label suffix', () => {
+    expect(extractIsbn('ISBN 1305957660')).toBe('1305957660')
+    expect(extractIsbn('ISBN 101234567X')).toBe('101234567X')
+  })
+
   it('skips neighbouring numbers on the same line', () => {
     expect(extractIsbn('Printed 1966 ISBN 0 486 21437 0 $12.95')).toBe('0486214370')
     expect(extractIsbn('ISBN-13: 978-0-486-21437-5 51295')).toBe('9780486214375')

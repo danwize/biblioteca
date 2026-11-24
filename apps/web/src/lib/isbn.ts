@@ -14,7 +14,7 @@ export function isValidIsbn10(value: string): boolean {
   return sum % 11 === 0
 }
 
-const ISBN_LABEL = /ISBN(?:[-\s]?1[03])?\s*:?/gi
+const ISBN_LABEL = /ISBN(?:[-\s]?1[03](?![0-9]))?\s*:?/gi
 const DIGIT_RUN = /[0-9Xx]+(?:[\s\-‐-―]+[0-9Xx]+)*/g
 const SEPARATOR = /[\s\-‐-―]+/
 

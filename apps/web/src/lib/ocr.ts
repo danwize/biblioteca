@@ -56,7 +56,7 @@ export async function downscaleForOcr(image: Blob): Promise<Blob> {
   if (typeof createImageBitmap !== 'function') return image
 
   try {
-    const bitmap = await createImageBitmap(image)
+    const bitmap = await createImageBitmap(image, { imageOrientation: 'from-image' })
     const ratio = Math.min(1, OCR_MAX_SIDE / Math.max(bitmap.width, bitmap.height))
     if (ratio === 1) {
       bitmap.close()
