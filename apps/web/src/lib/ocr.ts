@@ -48,10 +48,11 @@ function findTitleCandidate(lines: string[]): string | null {
   }) ?? null
 }
 
-const OCR_MAX_SIDE = 2000
+const OCR_MAX_SIDE = 3000
 
-// Full-resolution phone photos make Tesseract take many seconds; text stays legible at
-// this size. Falls back to the original image wherever canvas decoding is unavailable.
+// Very large photos make Tesseract take many seconds. Only images above this size are
+// shrunk, and only to it, so small back-cover print stays legible. Falls back to the
+// original image wherever canvas decoding is unavailable.
 export async function downscaleForOcr(image: Blob): Promise<Blob> {
   if (typeof createImageBitmap !== 'function') return image
 
@@ -67,7 +68,12 @@ export async function downscaleForOcr(image: Blob): Promise<Blob> {
     canvas.width = Math.max(1, Math.round(bitmap.width * ratio))
     canvas.height = Math.max(1, Math.round(bitmap.height * ratio))
     const context = canvas.getContext('2d')
-    context?.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    if (context) {
+      // JPEG has no alpha: paint white first so transparent areas do not turn black.
+      context.fillStyle = '#fff'
+      context.fillRect(0, 0, canvas.width, canvas.height)
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    }
     bitmap.close()
     if (!context) return image
 

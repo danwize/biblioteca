@@ -18,15 +18,32 @@ const ISBN_LABEL = /ISBN(?:[-\s]?1[03](?![0-9]))?\s*:?/gi
 const DIGIT_RUN = /[0-9Xx]+(?:[\s\-‐-―]+[0-9Xx]+)*/g
 const SEPARATOR = /[\s\-‐-―]+/
 
-// Finds a checksum-valid ISBN in free text such as OCR output. Digit groups may be
-// separated by spaces or hyphens ("978 0 486 21437 5", "0-486-21437-0"); groups are
-// joined only within a line, so a neighbouring year or price cannot be merged in.
+// Finds an ISBN in free text such as OCR output. Digit groups may be separated by
+// spaces or hyphens ("978 0 486 21437 5", "0-486-21437-0") and may wrap onto the next
+// line. Groups are only joined within a line or across one line break, so a neighbouring
+// year or price cannot be merged in. A checksum-valid ISBN wins; failing that, an
+// ISBN-shaped candidate is still returned so the user can correct a single misread digit.
 export function extractIsbn(text: string): string | null {
-  const groupRuns = text.split(/\r?\n/).flatMap((line) =>
-    (line.replace(ISBN_LABEL, ' ').match(DIGIT_RUN) ?? []).map((run) => run.toUpperCase().split(SEPARATOR))
-  )
+  const lines = text.split(/\r?\n/).map((line) => line.replace(ISBN_LABEL, ' '))
+  const singleLines = lines.map(digitGroupRuns).flat()
+  const wrappedLines = lines.slice(1).map((line, index) => digitGroupRuns(`${lines[index]} ${line}`)).flat()
 
-  return findInGroups(groupRuns, 13, isValidIsbn13) ?? findInGroups(groupRuns, 10, isValidIsbn10)
+  for (const runs of [singleLines, wrappedLines]) {
+    const isbn = findInGroups(runs, 13, isValidIsbn13) ?? findInGroups(runs, 10, isValidIsbn10)
+    if (isbn) return isbn
+  }
+
+  for (const runs of [singleLines, wrappedLines]) {
+    const candidate = findInGroups(runs, 13, (value) => /^97[89][0-9]{10}$/.test(value))
+      ?? findInGroups(runs, 10, (value) => /^[0-9]{9}[0-9X]$/.test(value))
+    if (candidate) return candidate
+  }
+
+  return null
+}
+
+function digitGroupRuns(line: string): string[][] {
+  return (line.match(DIGIT_RUN) ?? []).map((run) => run.toUpperCase().split(SEPARATOR))
 }
 
 function findInGroups(groupRuns: string[][], length: number, isValid: (value: string) => boolean): string | null {
@@ -38,7 +55,7 @@ function findInGroups(groupRuns: string[][], length: number, isValid: (value: st
         if (candidate.length === length && isValid(candidate)) return candidate
       }
       // An unseparated group may hold an ISBN-13 with extra digits around it (e.g. an
-      // EAN-13 plus its price add-on). The 978/979 prefix plus checksum keeps this safe;
+      // EAN-13 plus its price add-on). The 978/979 prefix keeps this reasonably safe;
       // ISBN-10 has no prefix, so it is only accepted on group boundaries.
       if (length !== 13) continue
       const group = groups[start]

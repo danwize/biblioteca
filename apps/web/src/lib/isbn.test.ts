@@ -21,9 +21,15 @@ describe('isbn checksums', () => {
     expect(isValidIsbn10('0486214371')).toBe(false)
   })
 
-  it('rejects OCR text whose ISBN-like digits fail the checksum', () => {
-    expect(extractIsbn('ISBN 978-0-486-21437-6')).toBeNull()
-    expect(extractIsbn('Call 0123456788 today')).toBeNull()
+  it('prefers a checksum-valid ISBN over an earlier misread one', () => {
+    expect(extractIsbn('ISBN 978-0-486-21437-6\nISBN 0-486-21437-0')).toBe('0486214370')
+    expect(extractIsbn('9780486214376 9780486214375')).toBe('9780486214375')
+  })
+
+  it('still suggests an ISBN-shaped OCR candidate with one misread digit so it can be corrected', () => {
+    expect(extractIsbn('ISBN 978-0-486-21437-6')).toBe('9780486214376')
+    expect(extractIsbn('ISBN 0-486-21437-1')).toBe('0486214371')
+    expect(extractIsbn('Price 12.95 Printed 1966')).toBeNull()
   })
 })
 
@@ -48,6 +54,12 @@ describe('separated ISBN digit groups', () => {
     expect(extractIsbn('Printed 1966 ISBN 0 486 21437 0 $12.95')).toBe('0486214370')
     expect(extractIsbn('ISBN-13: 978-0-486-21437-5 51295')).toBe('9780486214375')
     expect(extractIsbn('978048621437551295')).toBe('9780486214375')
+  })
+
+  it('joins digit groups that wrap across a line break', () => {
+    expect(extractIsbn('ISBN 978-0-486-\n21437-5')).toBe('9780486214375')
+    expect(extractIsbn('ISBN 978 0\n486 21437 5\nDover')).toBe('9780486214375')
+    expect(extractIsbn('ISBN 0-486-\n21437-0')).toBe('0486214370')
   })
 
   it('prefers ISBN-13 over ISBN-10 when both are present', () => {

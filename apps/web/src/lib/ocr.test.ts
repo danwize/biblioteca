@@ -21,28 +21,31 @@ describe('downscaleForOcr', () => {
   function stubPhoto(width: number, height: number) {
     const close = vi.fn()
     vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width, height, close })))
-    const drawImage = vi.fn()
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage } as unknown as CanvasRenderingContext2D)
+    const calls: string[] = []
+    const drawImage = vi.fn(() => { calls.push('drawImage') })
+    const context = { fillStyle: '', drawImage, fillRect: vi.fn(() => { calls.push(`fillRect ${context.fillStyle}`) }) }
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D)
     const toBlob = vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(function (this: HTMLCanvasElement, callback) {
       callback(new Blob([`${this.width}x${this.height}`], { type: 'image/jpeg' }))
     })
-    return { close, drawImage, toBlob }
+    return { calls, close, drawImage, toBlob }
   }
 
-  it('shrinks a full-resolution phone photo before OCR', async () => {
-    const { close, drawImage } = stubPhoto(4032, 3024)
+  it('shrinks a very large photo to a size where small print stays legible', async () => {
+    const { calls, close, drawImage } = stubPhoto(4032, 3024)
     const original = new Blob(['photo'], { type: 'image/jpeg' })
 
     const prepared = await downscaleForOcr(original)
 
     expect(prepared).not.toBe(original)
-    expect(await prepared.text()).toBe('2000x1500')
-    expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 2000, 1500)
+    expect(await prepared.text()).toBe('3000x2250')
+    expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 3000, 2250)
+    expect(calls).toEqual(['fillRect #fff', 'drawImage'])
     expect(close).toHaveBeenCalled()
   })
 
   it('passes small images through untouched', async () => {
-    const { toBlob } = stubPhoto(1200, 900)
+    const { toBlob } = stubPhoto(3000, 2250)
     const original = new Blob(['photo'], { type: 'image/jpeg' })
 
     expect(await downscaleForOcr(original)).toBe(original)
