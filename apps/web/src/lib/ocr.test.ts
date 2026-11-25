@@ -39,9 +39,24 @@ describe('downscaleForOcr', () => {
 
     expect(prepared).not.toBe(original)
     expect(await prepared.text()).toBe('3000x2250')
-    expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 3000, 2250)
+    expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 4032, 3024, 0, 0, 3000, 2250)
     expect(calls).toEqual(['fillRect #fff', 'drawImage'])
     expect(close).toHaveBeenCalled()
+  })
+
+  it('still downscales when the browser rejects the imageOrientation option', async () => {
+    stubPhoto(4032, 3024)
+    const close = vi.fn()
+    const createImageBitmap = vi.fn(async (_image: Blob, options?: ImageBitmapOptions) => {
+      if (options) throw new TypeError("The provided value 'from-image' is not a valid enum value")
+      return { width: 4032, height: 3024, close }
+    })
+    vi.stubGlobal('createImageBitmap', createImageBitmap)
+
+    const prepared = await downscaleForOcr(new Blob(['photo'], { type: 'image/jpeg' }))
+
+    expect(await prepared.text()).toBe('3000x2250')
+    expect(createImageBitmap).toHaveBeenCalledTimes(2)
   })
 
   it('passes small images through untouched', async () => {

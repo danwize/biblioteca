@@ -62,6 +62,21 @@ describe('separated ISBN digit groups', () => {
     expect(extractIsbn('ISBN 0-486-\n21437-0')).toBe('0486214370')
   })
 
+  it('finds an ISBN-13 with stray digits glued to its first or last group', () => {
+    expect(extractIsbn('1978-0-486-21437-5')).toBe('9780486214375')
+    expect(extractIsbn('978-0-486-21437-551295')).toBe('9780486214375')
+    expect(extractIsbn('ISBN 1978 0 486 21437 5 51295')).toBe('9780486214375')
+  })
+
+  it('prefers a wrapped checksum-valid ISBN-13 over an ISBN-10 on one line', () => {
+    expect(extractIsbn('ISBN 978-0-486-\n21437-5\nISBN 0-486-21437-0')).toBe('9780486214375')
+  })
+
+  it('does not take ISMN (979-0) sheet-music numbers for ISBNs', () => {
+    expect(isValidIsbn13('9790060115615')).toBe(false)
+    expect(extractIsbn('ISMN 979-0-060-11561-5')).toBeNull()
+  })
+
   it('prefers ISBN-13 over ISBN-10 when both are present', () => {
     expect(extractIsbn('ISBN 0-486-21437-0\nISBN 978-0-486-21437-5')).toBe('9780486214375')
   })

@@ -1,8 +1,7 @@
+import { releaseCanvas, scaleToWhiteCanvas, type Region } from './canvas'
 import { isValidIsbn13, normalizeIsbn } from './isbn'
 
 export type RgbaPixels = { data: Uint8ClampedArray; width: number; height: number }
-
-type Region = { x: number; y: number; width: number; height: number }
 
 export type BarcodeCandidatePlan = {
   // Region of the source image, as fractions of its width and height.
@@ -12,16 +11,24 @@ export type BarcodeCandidatePlan = {
 }
 
 const FULL = { x: 0, y: 0, width: 1, height: 1 }
+const BOTTOM = { x: 0, y: 0.45, width: 1, height: 0.55 }
 
-// A small, fixed set of crops. Phone photos are 12+ megapixels; every candidate is
-// downscaled so a full pass stays fast, but the half crops keep enough resolution
-// (about two thirds of a 4032px photo) for a normal-size back-cover barcode. The halves
-// cover the barcode's usual spot on a back cover however the phone was held: bottom
-// when upright, right or left when sideways, top when upside down. Each candidate is
-// decoded both as-is and rotated a quarter turn (see createZxingIsbnDecoder).
+// The native BarcodeDetector is fast, so it sees the photo at full resolution first,
+// where a small or distant barcode still has enough pixels per bar.
+export const NATIVE_FULL_RESOLUTION_PLAN: readonly BarcodeCandidatePlan[] = [
+  { region: FULL, maxSide: Infinity },
+  { region: BOTTOM, maxSide: Infinity }
+]
+
+// A small, fixed set of downscaled crops, shared by both detectors. Phone photos are 12+
+// megapixels; downscaling keeps a ZXing pass fast, while the half crops keep about half
+// of a 4032px photo's resolution or more (~3px per bar module for a normal-size
+// back-cover barcode). The halves cover the barcode's usual spot on a back cover however
+// the phone was held: bottom when upright, right or left when sideways, top when upside
+// down. ZXing decodes each one as-is and rotated a quarter turn (see createZxingIsbnDecoder).
 export const BARCODE_CANDIDATE_PLAN: readonly BarcodeCandidatePlan[] = [
   { region: FULL, maxSide: 1280 },
-  { region: { x: 0, y: 0.45, width: 1, height: 0.55 }, maxSide: 2000 },
+  { region: BOTTOM, maxSide: 2000 },
   { region: { x: 0.45, y: 0, width: 0.55, height: 1 }, maxSide: 2000 },
   { region: { x: 0, y: 0, width: 0.55, height: 1 }, maxSide: 2000 },
   { region: { x: 0, y: 0, width: 1, height: 0.55 }, maxSide: 2000 },
@@ -36,19 +43,25 @@ export function isbnFromBarcodeValue(rawValue: string): string | null {
 // Never rejects: any failure reading the photo or building candidates means "no barcode",
 // so the scan moves on to OCR instead of being left in the scanning state.
 export async function detectIsbnBarcode(dataUrl: string): Promise<string | null> {
+  const created: HTMLCanvasElement[] = []
   try {
     const image = await imageFromDataUrl(dataUrl)
-    // Candidates are built lazily and once, then shared by both detectors.
-    const candidates = replayable(barcodeCandidates(image))
+    const build = (plan: readonly BarcodeCandidatePlan[]) => barcodeCandidates(image, plan, created)
+    // Downscaled candidates are built lazily and once, then shared by both detectors.
+    const downscaled = replayable(build(BARCODE_CANDIDATE_PLAN))
 
-    const nativeIsbn = await detectWithNativeBarcodeDetector(candidates())
+    const nativeIsbn = await detectWithNativeBarcodeDetector(
+      concat(releasedAfterUse(build(NATIVE_FULL_RESOLUTION_PLAN)), downscaled())
+    )
     if (nativeIsbn) return nativeIsbn
 
     // The native detector is missing on many phone browsers (and sometimes finds nothing),
-    // so ZXing always gets a pass over the same candidates.
-    return await detectWithZxing(candidates())
+    // so ZXing always gets a pass over the downscaled candidates.
+    return await detectWithZxing(downscaled())
   } catch {
     return null
+  } finally {
+    created.forEach(releaseCanvas)
   }
 }
 
@@ -86,6 +99,12 @@ async function detectWithZxing(candidates: Iterable<HTMLCanvasElement>): Promise
   return null
 }
 
+// ZXing reports one barcode per decode. When it is not an ISBN (a price sticker, a
+// publisher's EAN), that barcode is blanked out and the image decoded again, so an ISBN
+// barcode elsewhere in the same image is still found, like the native detector's
+// multi-result check.
+const MAX_BARCODES_PER_IMAGE = 4
+
 // Decodes an EAN-13/UPC-A ISBN barcode in any orientation. Each image is tried as-is and
 // rotated a quarter turn; with TRY_HARDER, ZXing also scans every row reversed, which
 // covers the upside-down (180°) and 270° cases without extra passes.
@@ -99,15 +118,28 @@ export async function createZxingIsbnDecoder(): Promise<(pixels: RgbaPixels) => 
   const reader = new MultiFormatReader()
   reader.setHints(hints)
 
-  const decodeLuminance = (luminance: Uint8ClampedArray, width: number, height: number) => {
+  const decodeOnce = (luminance: Uint8ClampedArray, width: number, height: number) => {
     try {
       const bitmap = new BinaryBitmap(new HybridBinarizer(new RGBLuminanceSource(luminance, width, height)))
-      return isbnFromBarcodeValue(reader.decodeWithState(bitmap).getText())
+      return reader.decodeWithState(bitmap)
     } catch {
       return null
     } finally {
       reader.reset()
     }
+  }
+
+  const decodeLuminance = (source: Uint8ClampedArray, width: number, height: number) => {
+    let luminance = source
+    for (let attempt = 0; attempt < MAX_BARCODES_PER_IMAGE; attempt += 1) {
+      const result = decodeOnce(luminance, width, height)
+      if (!result) return null
+      const isbn = isbnFromBarcodeValue(result.getText())
+      if (isbn) return isbn
+      if (attempt === 0) luminance = new Uint8ClampedArray(source)
+      blankOut(luminance, width, height, result.getResultPoints())
+    }
+    return null
   }
 
   return ({ data, width, height }) => {
@@ -139,47 +171,57 @@ function rotateQuarterTurn(luminance: Uint8ClampedArray, width: number, height: 
   return rotated
 }
 
-function* barcodeCandidates(image: HTMLImageElement): Generator<HTMLCanvasElement> {
+// Paints white over a decoded 1D barcode. ZXing reports points along the scan row; the
+// bars extend above and below it, so the box is padded vertically by the barcode's width.
+function blankOut(luminance: Uint8ClampedArray, width: number, height: number, points: { getX(): number; getY(): number }[]) {
+  if (points.length === 0) return
+  const xs = points.map((point) => point.getX())
+  const ys = points.map((point) => point.getY())
+  const barcodeWidth = Math.max(...xs) - Math.min(...xs)
+  const left = Math.max(0, Math.floor(Math.min(...xs) - barcodeWidth * 0.15))
+  const right = Math.min(width - 1, Math.ceil(Math.max(...xs) + barcodeWidth * 0.15))
+  const top = Math.max(0, Math.floor(Math.min(...ys) - barcodeWidth * 0.75))
+  const bottom = Math.min(height - 1, Math.ceil(Math.max(...ys) + barcodeWidth * 0.75))
+  for (let y = top; y <= bottom; y += 1) {
+    luminance.fill(255, y * width + left, y * width + right + 1)
+  }
+}
+
+function* barcodeCandidates(
+  image: HTMLImageElement,
+  plan: readonly BarcodeCandidatePlan[],
+  created: HTMLCanvasElement[]
+): Generator<HTMLCanvasElement> {
   const width = image.naturalWidth || image.width
   const height = image.naturalHeight || image.height
 
-  for (const { region, maxSide } of BARCODE_CANDIDATE_PLAN) {
-    yield cropScaledCanvas(image, {
+  for (const { region, maxSide } of plan) {
+    const canvas = scaleToWhiteCanvas(image, {
       x: region.x * width,
       y: region.y * height,
       width: region.width * width,
       height: region.height * height
-    }, maxSide)
+    }, maxSide, { willReadFrequently: true })
+    if (!canvas) continue
+    created.push(canvas)
+    yield canvas
   }
-}
-
-// Crops and downscales in one draw so a full-resolution copy of the photo is never made.
-function cropScaledCanvas(image: HTMLImageElement, region: Region, maxSide: number): HTMLCanvasElement {
-  const ratio = Math.min(1, maxSide / Math.max(region.width, region.height))
-  const canvas = document.createElement('canvas')
-  canvas.width = Math.max(1, Math.round(region.width * ratio))
-  canvas.height = Math.max(1, Math.round(region.height * ratio))
-  const context = context2d(canvas)
-  if (!context) return canvas
-
-  context.fillStyle = '#fff'
-  context.fillRect(0, 0, canvas.width, canvas.height)
-  context.drawImage(
-    image,
-    Math.round(region.x),
-    Math.round(region.y),
-    Math.round(region.width),
-    Math.round(region.height),
-    0,
-    0,
-    canvas.width,
-    canvas.height
-  )
-  return canvas
 }
 
 function context2d(canvas: HTMLCanvasElement): CanvasRenderingContext2D | null {
   return canvas.getContext('2d', { willReadFrequently: true })
+}
+
+// Full-resolution canvases are large; free each as soon as the detector moves past it.
+function* releasedAfterUse(candidates: Iterable<HTMLCanvasElement>): Generator<HTMLCanvasElement> {
+  for (const canvas of candidates) {
+    yield canvas
+    releaseCanvas(canvas)
+  }
+}
+
+function* concat<T>(...sources: Iterable<T>[]): Generator<T> {
+  for (const source of sources) yield* source
 }
 
 function replayable<T>(source: Iterator<T>): () => Generator<T> {

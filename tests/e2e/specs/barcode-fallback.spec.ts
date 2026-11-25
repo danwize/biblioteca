@@ -66,6 +66,59 @@ for (const { name, width, height, degrees, x, y } of [
   })
 }
 
+test('native detector sees the full-resolution photo first and scan canvases are released', async ({ page }) => {
+  await page.addInitScript(() => {
+    const state = window as unknown as { nativeSizes: string[]; canvases: HTMLCanvasElement[] }
+    state.nativeSizes = []
+    state.canvases = []
+    const createElement = document.createElement.bind(document)
+    document.createElement = ((tagName: string, options?: ElementCreationOptions) => {
+      const element = createElement(tagName, options)
+      if (tagName.toLowerCase() === 'canvas') state.canvases.push(element as HTMLCanvasElement)
+      return element
+    }) as typeof document.createElement
+    class RecordingBarcodeDetector {
+      async detect(source: HTMLCanvasElement) {
+        state.nativeSizes.push(`${source.width}x${source.height}`)
+        return []
+      }
+    }
+    Object.defineProperty(window, 'BarcodeDetector', { value: RecordingBarcodeDetector })
+  })
+  await mockGraphql(page)
+  await page.goto('/')
+
+  const photo = await page.evaluate(async (fixture) => {
+    const image = new Image()
+    image.src = `data:image/png;base64,${fixture}`
+    await image.decode()
+    const canvas = document.createElement('canvas')
+    canvas.width = 3024
+    canvas.height = 4032
+    const context = canvas.getContext('2d')!
+    context.fillStyle = '#e8e4da'
+    context.fillRect(0, 0, canvas.width, canvas.height)
+    context.drawImage(image, 1800, 3000, image.width * 2, image.height * 2)
+    const data = canvas.toDataURL('image/jpeg', 0.9).split(',')[1]
+    canvas.width = 0
+    canvas.height = 0
+    return data
+  }, backCoverPng.toString('base64'))
+
+  await uploadBackCover(page, Buffer.from(photo, 'base64'), 'image/jpeg')
+  await expect(page.getByLabel(/isbn lookup/i)).toHaveValue('9780486214375', { timeout: 15_000 })
+
+  const { nativeSizes, liveCanvases } = await page.evaluate(() => {
+    const state = window as unknown as { nativeSizes: string[]; canvases: HTMLCanvasElement[] }
+    return {
+      nativeSizes: state.nativeSizes,
+      liveCanvases: state.canvases.filter((canvas) => canvas.width * canvas.height > 0).length
+    }
+  })
+  expect(nativeSizes.slice(0, 2)).toEqual(['3024x4032', '3024x2218'])
+  expect(liveCanvases).toBe(0)
+})
+
 test('an unreadable photo moves on to OCR instead of hanging in scanning', async ({ page }) => {
   await page.addInitScript(() => {
     delete (window as { BarcodeDetector?: unknown }).BarcodeDetector

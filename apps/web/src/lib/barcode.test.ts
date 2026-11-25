@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import backCoverPng from './fixtures/back-cover-isbn-9780486214375.png?inline'
 import { decodeGrayscalePng } from '../test/png'
-import { BARCODE_CANDIDATE_PLAN, createZxingIsbnDecoder, isbnFromBarcodeValue, type RgbaPixels } from './barcode'
+import { drawBarcodes } from '../test/ean13'
+import { BARCODE_CANDIDATE_PLAN, NATIVE_FULL_RESOLUTION_PLAN, createZxingIsbnDecoder, isbnFromBarcodeValue, type RgbaPixels } from './barcode'
 
 describe('ZXing fallback decoder', () => {
   it('reads the ISBN from a real back-cover barcode image', async () => {
@@ -25,6 +26,16 @@ describe('ZXing fallback decoder', () => {
     expect(decode({ data: transparent, width, height })).toBe('9780486214375')
   })
 
+  it('looks past a non-ISBN barcode (price sticker) to the ISBN in the same image', async () => {
+    const decode = await createZxingIsbnDecoder()
+    const image = drawBarcodes(640, 500, [
+      // The sticker sits on the middle rows, where ZXing starts scanning.
+      { value: '4006381333931', x: 40, y: 170, module: 3, barHeight: 120 },
+      { value: '9780486214375', x: 300, y: 340, module: 3, barHeight: 120 }
+    ])
+    expect(decode(image)).toBe('9780486214375')
+  })
+
   it('finds nothing in an image without a barcode', async () => {
     const decode = await createZxingIsbnDecoder()
     const blank = { data: new Uint8ClampedArray(200 * 100 * 4).fill(235), width: 200, height: 100 }
@@ -42,6 +53,8 @@ describe('isbnFromBarcodeValue', () => {
     expect(isbnFromBarcodeValue('4006381333931')).toBeNull()
     expect(isbnFromBarcodeValue('012345678905')).toBeNull()
     expect(isbnFromBarcodeValue('9780486214376')).toBeNull()
+    // 979-0 is the ISMN (sheet music) range, not ISBN.
+    expect(isbnFromBarcodeValue('9790060115615')).toBeNull()
   })
 })
 
@@ -50,6 +63,11 @@ describe('barcode candidate plan', () => {
     expect(BARCODE_CANDIDATE_PLAN.length).toBeLessThanOrEqual(8)
     expect(Math.max(...BARCODE_CANDIDATE_PLAN.map((candidate) => candidate.maxSide))).toBeLessThanOrEqual(2000)
     expect(BARCODE_CANDIDATE_PLAN[0]).toMatchObject({ region: { x: 0, y: 0, width: 1, height: 1 } })
+  })
+
+  it('gives the native detector the photo at full resolution first', () => {
+    expect(NATIVE_FULL_RESOLUTION_PLAN[0]).toEqual({ region: { x: 0, y: 0, width: 1, height: 1 }, maxSide: Infinity })
+    expect(NATIVE_FULL_RESOLUTION_PLAN.every(({ maxSide }) => maxSide === Infinity)).toBe(true)
   })
 
   it('covers the half where a back-cover barcode lands in every phone orientation', () => {
