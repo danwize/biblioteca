@@ -93,4 +93,19 @@ describe('separated ISBN digit groups', () => {
   it('prefers ISBN-13 over ISBN-10 when both are present', () => {
     expect(extractIsbn('ISBN 0-486-21437-0\nISBN 978-0-486-21437-5')).toBe('9780486214375')
   })
+
+  it('extracts an unlabeled ISBN-10 printed with hyphen or space digit groups', () => {
+    expect(extractIsbn('Dover 0-486-21437-0 $12.95')).toBe('0486214370')
+    expect(extractIsbn('0 486 21437 0')).toBe('0486214370')
+  })
+
+  it('does not return an unlabeled ungrouped 10-digit run even with a valid ISBN-10 checksum', () => {
+    expect(extractIsbn('0486214370')).toBeNull()
+  })
+
+  it('accepts common OCR misreads of the ISBN label', () => {
+    expect(extractIsbn('1SBN 0486214370')).toBe('0486214370')
+    expect(extractIsbn('lSBN 0486214370')).toBe('0486214370')
+    expect(extractIsbn('I S B N 0486214370')).toBe('0486214370')
+  })
 })
