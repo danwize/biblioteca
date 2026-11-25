@@ -28,8 +28,21 @@ describe('isbn checksums', () => {
 
   it('still suggests an ISBN-shaped OCR candidate with one misread digit so it can be corrected', () => {
     expect(extractIsbn('ISBN 978-0-486-21437-6')).toBe('9780486214376')
-    expect(extractIsbn('ISBN 0-486-21437-1')).toBe('0486214371')
     expect(extractIsbn('Price 12.95 Printed 1966')).toBeNull()
+  })
+
+  it('offers the 13-digit candidate rather than a different book when one ISBN-13 digit is misread', () => {
+    expect(extractIsbn('ISBN 978-0-466-21437-5')).toBe('9780466214375')
+    expect(extractIsbn('978-0-486-20437-5')).toBe('9780486204375')
+  })
+
+  it('finds an unseparated ISBN-10 glued to the printing year', () => {
+    expect(extractIsbn('ISBN 04862143701966')).toBe('0486214370')
+  })
+
+  it('does not return phone numbers as ISBNs', () => {
+    expect(extractIsbn('Call 555 123 4567')).toBeNull()
+    expect(extractIsbn('Tel 0 800 123 4560')).toBeNull()
   })
 })
 

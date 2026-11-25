@@ -13,14 +13,14 @@ export type BarcodeCandidatePlan = {
 const FULL = { x: 0, y: 0, width: 1, height: 1 }
 const BOTTOM = { x: 0, y: 0.45, width: 1, height: 0.55 }
 
-// The native BarcodeDetector is fast, so it sees the photo at full resolution first,
-// where a small or distant barcode still has enough pixels per bar.
+// The native BarcodeDetector is fast, so it sees the photo once at full resolution, where a
+// small or distant barcode still has enough pixels per bar. The cap keeps 12 MP photos at
+// full size but stops 50-200 MP photos from allocating a canvas big enough to crash the tab.
 export const NATIVE_FULL_RESOLUTION_PLAN: readonly BarcodeCandidatePlan[] = [
-  { region: FULL, maxSide: Infinity },
-  { region: BOTTOM, maxSide: Infinity }
+  { region: FULL, maxSide: 4096 }
 ]
 
-// A small, fixed set of downscaled crops, shared by both detectors. Phone photos are 12+
+// A small, fixed set of downscaled crops for ZXing. Phone photos are 12+
 // megapixels; downscaling keeps a ZXing pass fast, while the half crops keep about half
 // of a 4032px photo's resolution or more (~3px per bar module for a normal-size
 // back-cover barcode). The halves cover the barcode's usual spot on a back cover however
@@ -46,18 +46,14 @@ export async function detectIsbnBarcode(dataUrl: string): Promise<string | null>
   const created: HTMLCanvasElement[] = []
   try {
     const image = await imageFromDataUrl(dataUrl)
-    const build = (plan: readonly BarcodeCandidatePlan[]) => barcodeCandidates(image, plan, created)
-    // Downscaled candidates are built lazily and once, then shared by both detectors.
-    const downscaled = replayable(build(BARCODE_CANDIDATE_PLAN))
+    const build = (plan: readonly BarcodeCandidatePlan[]) => releasedAfterUse(barcodeCandidates(image, plan, created))
 
-    const nativeIsbn = await detectWithNativeBarcodeDetector(
-      concat(releasedAfterUse(build(NATIVE_FULL_RESOLUTION_PLAN)), downscaled())
-    )
+    const nativeIsbn = await detectWithNativeBarcodeDetector(build(NATIVE_FULL_RESOLUTION_PLAN))
     if (nativeIsbn) return nativeIsbn
 
     // The native detector is missing on many phone browsers (and sometimes finds nothing),
     // so ZXing always gets a pass over the downscaled candidates.
-    return await detectWithZxing(downscaled())
+    return await detectWithZxing(build(BARCODE_CANDIDATE_PLAN))
   } catch {
     return null
   } finally {
@@ -171,18 +167,37 @@ function rotateQuarterTurn(luminance: Uint8ClampedArray, width: number, height: 
   return rotated
 }
 
-// Paints white over a decoded 1D barcode. ZXing reports points along the scan row; the
-// bars extend above and below it, so the box is padded vertically by the barcode's width.
+// Paints white over a decoded 1D barcode, and only over that barcode, so an ISBN barcode
+// right next to it survives. ZXing reports the ends of the scan row it read; the bars run
+// up and down from that row for as long as rows keep a similar number of bar edges.
 function blankOut(luminance: Uint8ClampedArray, width: number, height: number, points: { getX(): number; getY(): number }[]) {
   if (points.length === 0) return
   const xs = points.map((point) => point.getX())
   const ys = points.map((point) => point.getY())
-  const barcodeWidth = Math.max(...xs) - Math.min(...xs)
-  const left = Math.max(0, Math.floor(Math.min(...xs) - barcodeWidth * 0.15))
-  const right = Math.min(width - 1, Math.ceil(Math.max(...xs) + barcodeWidth * 0.15))
-  const top = Math.max(0, Math.floor(Math.min(...ys) - barcodeWidth * 0.75))
-  const bottom = Math.min(height - 1, Math.ceil(Math.max(...ys) + barcodeWidth * 0.75))
-  for (let y = top; y <= bottom; y += 1) {
+  const padding = Math.ceil((Math.max(...xs) - Math.min(...xs)) * 0.05) + 1
+  const left = Math.max(0, Math.floor(Math.min(...xs)) - padding)
+  const right = Math.min(width - 1, Math.ceil(Math.max(...xs)) + padding)
+  const scanRow = Math.min(height - 1, Math.max(0, Math.round(ys.reduce((sum, y) => sum + y, 0) / ys.length)))
+
+  const rowSegment = (y: number) => luminance.subarray(y * width + left, y * width + right + 1)
+  const scanSegment = rowSegment(scanRow)
+  const threshold = (Math.min(...scanSegment) + Math.max(...scanSegment)) / 2
+  const edges = (y: number) => {
+    let count = 0
+    const segment = rowSegment(y)
+    for (let x = 1; x < segment.length; x += 1) {
+      if ((segment[x - 1] < threshold) !== (segment[x] < threshold)) count += 1
+    }
+    return count
+  }
+  const minEdges = edges(scanRow) / 2
+  let top = scanRow
+  while (top > 0 && edges(top - 1) >= minEdges) top -= 1
+  let bottom = scanRow
+  while (bottom < height - 1 && edges(bottom + 1) >= minEdges) bottom += 1
+
+  const verticalPadding = Math.ceil(padding / 2)
+  for (let y = Math.max(0, top - verticalPadding); y <= Math.min(height - 1, bottom + verticalPadding); y += 1) {
     luminance.fill(255, y * width + left, y * width + right + 1)
   }
 }
@@ -212,34 +227,11 @@ function context2d(canvas: HTMLCanvasElement): CanvasRenderingContext2D | null {
   return canvas.getContext('2d', { willReadFrequently: true })
 }
 
-// Full-resolution canvases are large; free each as soon as the detector moves past it.
+// Canvases are large; free each as soon as the detector moves past it.
 function* releasedAfterUse(candidates: Iterable<HTMLCanvasElement>): Generator<HTMLCanvasElement> {
   for (const canvas of candidates) {
     yield canvas
     releaseCanvas(canvas)
-  }
-}
-
-function* concat<T>(...sources: Iterable<T>[]): Generator<T> {
-  for (const source of sources) yield* source
-}
-
-function replayable<T>(source: Iterator<T>): () => Generator<T> {
-  const seen: T[] = []
-  let done = false
-  return function* () {
-    for (let index = 0; ; index += 1) {
-      if (index === seen.length) {
-        if (done) return
-        const next = source.next()
-        if (next.done) {
-          done = true
-          return
-        }
-        seen.push(next.value)
-      }
-      yield seen[index]
-    }
   }
 }
 

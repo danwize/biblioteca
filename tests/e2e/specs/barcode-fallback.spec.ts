@@ -66,7 +66,7 @@ for (const { name, width, height, degrees, x, y } of [
   })
 }
 
-test('native detector sees the full-resolution photo first and scan canvases are released', async ({ page }) => {
+test('native detector sees the full-resolution photo once, then ZXing takes over, and scan canvases are released', async ({ page }) => {
   await page.addInitScript(() => {
     const state = window as unknown as { nativeSizes: string[]; canvases: HTMLCanvasElement[] }
     state.nativeSizes = []
@@ -115,7 +115,7 @@ test('native detector sees the full-resolution photo first and scan canvases are
       liveCanvases: state.canvases.filter((canvas) => canvas.width * canvas.height > 0).length
     }
   })
-  expect(nativeSizes.slice(0, 2)).toEqual(['3024x4032', '3024x2218'])
+  expect(nativeSizes).toEqual(['3024x4032'])
   expect(liveCanvases).toBe(0)
 })
 

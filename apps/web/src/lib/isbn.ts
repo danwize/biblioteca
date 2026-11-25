@@ -24,56 +24,46 @@ export function isValidIsbn10(value: string): boolean {
 }
 
 const ISBN_LABEL = /ISBN(?:[-\s]?1[03](?![0-9]))?\s*:?/gi
-const DIGIT_RUN = /[0-9Xx]+(?:[\s\-\u2010-\u2015]+[0-9Xx]+)*/g
-const SEPARATORS = /[\s\-\u2010-\u2015]+/g
+const LABEL_MARK = '#'
+const SEPARATORS = /[\s\-‐-―]+/g
 
-// Finds an ISBN in free text such as OCR output. Digit groups may be separated by
-// spaces or hyphens ("978 0 486 21437 5", "0-486-21437-0") and may wrap onto the next
-// line. Text is only joined within a line or across one line break, so far-away numbers
-// cannot be merged in. In order of preference:
-//   1. a checksum-valid ISBN-13 anywhere in the separator-free text, even with stray
-//      digits glued on ("1978-0-486-21437-5", "978-0-486-21437-551295");
-//   2. a checksum-valid ISBN-10 made of whole digit groups;
-//   3. an ISBN-shaped candidate, so the user can correct a single misread digit.
+// Finds an ISBN in free text such as OCR output. Like a printed ISBN, the text is compacted
+// by dropping spaces, hyphens and line breaks, so spaced, hyphenated and wrapped digit groups
+// join up, and then scanned for digit windows. In order of preference:
+//   1. a checksum-valid ISBN-13 (978/979, not the 979-0 ISMN range), even with stray digits
+//      glued on ("1978-0-486-21437-5", "978-0-486-21437-551295");
+//   2. a checksum-valid ISBN-10 right after an "ISBN" label, so phone numbers and prices are
+//      not returned, and not taken from inside a 978/979 13-digit run, so a misread ISBN-13
+//      does not turn into a different book's ISBN-10;
+//   3. an unvalidated 978/979 13-digit candidate, so the user can correct a misread digit.
 export function extractIsbn(text: string): string | null {
-  const lines = text.split(/\r?\n/).map((line) => line.replace(ISBN_LABEL, ' '))
-  // Single lines first, then each pair of adjacent lines for ISBNs that wrap.
-  const texts = [...lines, ...lines.slice(1).map((line, index) => `${lines[index]} ${line}`)]
-  const compacted = texts.map((value) => value.replace(SEPARATORS, '').toUpperCase())
-  const groupRuns = texts.flatMap((value) =>
-    (value.match(DIGIT_RUN) ?? [])
-      .map((run) => run.toUpperCase().split(SEPARATORS))
-      // An ISMN (979-0...) is not an ISBN, so its groups must not yield an ISBN-10 either.
-      .filter((groups) => !/^9790[0-9]{9}/.test(groups.join('')))
-  )
+  const compacted = text.replace(ISBN_LABEL, LABEL_MARK).replace(SEPARATORS, '').toUpperCase()
+  const runs = [...compacted.matchAll(/(#?)([0-9X]+)/g)].map(([, label, digits]) => ({ labeled: label === LABEL_MARK, digits }))
 
-  return findIsbn13Window(compacted, isValidIsbn13)
-    ?? findIsbn10InGroups(groupRuns, isValidIsbn10)
-    ?? findIsbn13Window(compacted, isIsbn13Shaped)
-    ?? findIsbn10InGroups(groupRuns, isIsbn10Shaped)
+  return findWindow(runs, 13, isValidIsbn13)
+    ?? findWindow(runs.filter((run) => run.labeled), 10, (window, digits, offset) =>
+      isValidIsbn10(window) && !insideIsbn13Run(digits, offset))
+    ?? findWindow(runs, 13, isIsbn13Shaped)
 }
 
-function findIsbn13Window(compacted: string[], accept: (value: string) => boolean): string | null {
-  for (const value of compacted) {
-    for (let offset = 0; offset + 13 <= value.length; offset += 1) {
-      const window = value.slice(offset, offset + 13)
-      if (accept(window)) return window
+function findWindow(
+  runs: Array<{ digits: string }>,
+  length: number,
+  accept: (window: string, digits: string, offset: number) => boolean
+): string | null {
+  for (const { digits } of runs) {
+    for (let offset = 0; offset + length <= digits.length; offset += 1) {
+      const window = digits.slice(offset, offset + length)
+      if (accept(window, digits, offset)) return window
     }
   }
   return null
 }
 
-// ISBN-10 has no fixed prefix, so it is only accepted when it is made of whole digit
-// groups; otherwise any 10 digits out of a phone number or price list could match.
-function findIsbn10InGroups(groupRuns: string[][], accept: (value: string) => boolean): string | null {
-  for (const groups of groupRuns) {
-    for (let start = 0; start < groups.length; start += 1) {
-      let candidate = ''
-      for (let end = start; end < groups.length && candidate.length < 10; end += 1) {
-        candidate += groups[end]
-        if (candidate.length === 10 && accept(candidate)) return candidate
-      }
-    }
+// True when the ISBN-10 window at offset lies within a 978/979-prefixed 13-digit run.
+function insideIsbn13Run(digits: string, offset: number): boolean {
+  for (let start = Math.max(0, offset - 3); start <= offset; start += 1) {
+    if (/^97[89][0-9]{10}$/.test(digits.slice(start, start + 13))) return true
   }
-  return null
+  return false
 }

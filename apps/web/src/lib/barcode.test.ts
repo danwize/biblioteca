@@ -36,6 +36,15 @@ describe('ZXing fallback decoder', () => {
     expect(decode(image)).toBe('9780486214375')
   })
 
+  it('still finds an ISBN barcode just below a price sticker after blanking the sticker out', async () => {
+    const decode = await createZxingIsbnDecoder()
+    const image = drawBarcodes(500, 600, [
+      { value: '4006381333931', x: 100, y: 240, module: 3, barHeight: 120 },
+      { value: '9780486214375', x: 100, y: 380, module: 3, barHeight: 110 }
+    ])
+    expect(decode(image)).toBe('9780486214375')
+  })
+
   it('finds nothing in an image without a barcode', async () => {
     const decode = await createZxingIsbnDecoder()
     const blank = { data: new Uint8ClampedArray(200 * 100 * 4).fill(235), width: 200, height: 100 }
@@ -65,9 +74,8 @@ describe('barcode candidate plan', () => {
     expect(BARCODE_CANDIDATE_PLAN[0]).toMatchObject({ region: { x: 0, y: 0, width: 1, height: 1 } })
   })
 
-  it('gives the native detector the photo at full resolution first', () => {
-    expect(NATIVE_FULL_RESOLUTION_PLAN[0]).toEqual({ region: { x: 0, y: 0, width: 1, height: 1 }, maxSide: Infinity })
-    expect(NATIVE_FULL_RESOLUTION_PLAN.every(({ maxSide }) => maxSide === Infinity)).toBe(true)
+  it('gives the native detector one full-resolution pass, capped for very large photos', () => {
+    expect(NATIVE_FULL_RESOLUTION_PLAN).toEqual([{ region: { x: 0, y: 0, width: 1, height: 1 }, maxSide: 4096 }])
   })
 
   it('covers the half where a back-cover barcode lands in every phone orientation', () => {
