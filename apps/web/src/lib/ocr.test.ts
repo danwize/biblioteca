@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { parseOcrSuggestion } from './ocr'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { downscaleForOcr, parseOcrSuggestion } from './ocr'
 
 describe('parseOcrSuggestion', () => {
   it('cleans noisy OCR lines and avoids ISBN as the title', () => {
@@ -9,5 +9,61 @@ describe('parseOcrSuggestion', () => {
       title: 'The Real Book Title',
       authors: ['Jane Reader']
     })
+  })
+})
+
+describe('downscaleForOcr', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  function stubPhoto(width: number, height: number) {
+    const close = vi.fn()
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width, height, close })))
+    const calls: string[] = []
+    const drawImage = vi.fn(() => { calls.push('drawImage') })
+    const context = { fillStyle: '', drawImage, fillRect: vi.fn(() => { calls.push(`fillRect ${context.fillStyle}`) }) }
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D)
+    const toBlob = vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(function (this: HTMLCanvasElement, callback) {
+      callback(new Blob([`${this.width}x${this.height}`], { type: 'image/jpeg' }))
+    })
+    return { calls, close, drawImage, toBlob }
+  }
+
+  it('shrinks a very large photo to a size where small print stays legible', async () => {
+    const { calls, close, drawImage } = stubPhoto(4032, 3024)
+    const original = new Blob(['photo'], { type: 'image/jpeg' })
+
+    const prepared = await downscaleForOcr(original)
+
+    expect(prepared).not.toBe(original)
+    expect(await prepared.text()).toBe('3000x2250')
+    expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 4032, 3024, 0, 0, 3000, 2250)
+    expect(calls).toEqual(['fillRect #fff', 'drawImage'])
+    expect(close).toHaveBeenCalled()
+  })
+
+  it('still downscales when the browser rejects the imageOrientation option', async () => {
+    stubPhoto(4032, 3024)
+    const close = vi.fn()
+    const createImageBitmap = vi.fn(async (_image: Blob, options?: ImageBitmapOptions) => {
+      if (options) throw new TypeError("The provided value 'from-image' is not a valid enum value")
+      return { width: 4032, height: 3024, close }
+    })
+    vi.stubGlobal('createImageBitmap', createImageBitmap)
+
+    const prepared = await downscaleForOcr(new Blob(['photo'], { type: 'image/jpeg' }))
+
+    expect(await prepared.text()).toBe('3000x2250')
+    expect(createImageBitmap).toHaveBeenCalledTimes(2)
+  })
+
+  it('passes small images through untouched', async () => {
+    const { toBlob } = stubPhoto(3000, 2250)
+    const original = new Blob(['photo'], { type: 'image/jpeg' })
+
+    expect(await downscaleForOcr(original)).toBe(original)
+    expect(toBlob).not.toHaveBeenCalled()
   })
 })
